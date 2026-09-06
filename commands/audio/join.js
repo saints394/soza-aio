@@ -16,6 +16,9 @@ module.exports = {
         // voice and persisting the session can take longer than that, so
         // acknowledge first and edit the ephemeral reply when finished.
         await interaction.deferReply({ ephemeral: true });
+        await interaction.editReply({
+            content: 'Connecting to your voice channel...'
+        });
 
         const voiceChannel = interaction.member?.voice?.channel;
 
@@ -40,9 +43,16 @@ module.exports = {
         }
 
         try {
-            const result = await joinPersistentVoice(client, voiceChannel, {
-                requestedBy: interaction.user.id
-            });
+            const result = await Promise.race([
+                joinPersistentVoice(client, voiceChannel, {
+                    requestedBy: interaction.user.id
+                }),
+                new Promise((_, reject) => {
+                    setTimeout(() => {
+                        reject(new Error('Voice connection timed out after 20 seconds.'));
+                    }, 20000);
+                })
+            ]);
 
             await interaction.editReply({
                 content: result.alreadyConnected

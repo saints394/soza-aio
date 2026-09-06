@@ -202,13 +202,31 @@ module.exports = {
 
             if (subcommand === '247') {
                 const enabled = interaction.options.getBoolean('enabled', true);
-                await setPersistentVoiceMode(guildId, enabled);
-
-                return interaction.editReply({
-                    content: enabled
-                        ? '**24/7 Mode**\n24/7 mode enabled. The bot will stay in the voice channel when the queue ends. Use `/join` separately to connect to a voice channel.'
-                        : '**24/7 Mode**\n24/7 mode disabled. The bot will leave normally when the queue ends.'
+                await interaction.editReply({
+                    content: 'Updating 24/7 mode...'
                 });
+
+                try {
+                    await Promise.race([
+                        setPersistentVoiceMode(guildId, enabled),
+                        new Promise((_, reject) => {
+                            setTimeout(() => {
+                                reject(new Error('Updating 24/7 mode timed out after 10 seconds.'));
+                            }, 10000);
+                        })
+                    ]);
+
+                    return interaction.editReply({
+                        content: enabled
+                            ? '**24/7 Mode**\n24/7 mode enabled. The bot will stay in the voice channel when the queue ends. Use `/join` separately to connect to a voice channel.'
+                            : '**24/7 Mode**\n24/7 mode disabled. The bot will leave normally when the queue ends.'
+                    });
+                } catch (error) {
+                    console.error('[VOICE 24/7] Failed to update mode:', error);
+                    return interaction.editReply({
+                        content: 'I could not update 24/7 mode. The database may be unavailable; please try again.'
+                    });
+                }
             }
 
       
