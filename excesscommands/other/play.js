@@ -7,6 +7,32 @@ function temporaryReply(message, content, timeout = 6000) {
     });
 }
 
+function withTimeout(promise, timeoutMs, label) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+    });
+
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function destroyGuildPlayer(client, guildId) {
+    const player = client.riffy?.players.get(guildId);
+    if (!player) return;
+
+    try {
+        player.destroy();
+    } catch (error) {
+        console.warn(`[RIFFY] Could not destroy stale player for ${guildId}:`, error.message);
+    }
+
+    if (client.riffy.players.get(guildId) === player) {
+        client.riffy.players.delete(guildId);
+    }
+}
+
 module.exports = {
     async execute(message, args, client) {
         const query = args.join(' ').trim();
@@ -36,25 +62,39 @@ module.exports = {
             return temporaryReply(message, '❌ The music system is not ready yet. Please try again shortly.');
         }
 
-        try {
-            let player = client.riffy.players.get(message.guild.id);
-
-            if (!player) {
-                player = await client.riffy.createConnection({
-                    guildId: message.guild.id,
-                    voiceChannel: voiceChannel.id,
-                    textChannel: message.channel.id,
-                    deaf: true
-                });
-            }
-
-            const result = await client.riffy.resolve({
+        const guildId = message.guild.id;
+        const createPlayer = () => withTimeout(
+            client.riffy.createConnection({
+                guildId,
+                voiceChannel: voiceChannel.id,
+                textChannel: message.channel.id,
+                deaf: true
+            }),
+            15000,
+            'Lavalink voice connection'
+        );
+        const resolveTrack = () => withTimeout(
+            client.riffy.resolve({
                 query,
                 requester: message.author
-            });
+            }),
+            20000,
+            'Track search'
+        );
 
+        const playAttempt = async (forceFresh) => {
+            if (forceFresh) {
+                destroyGuildPlayer(client, guildId);
+            }
+
+            let player = client.riffy.players.get(guildId);
+            if (!player) {
+                player = await createPlayer();
+            }
+
+            const result = await resolveTrack();
             if (!result?.tracks?.length) {
-                return temporaryReply(message, `❌ No tracks found for **${query}**.`);
+                return { player, track: null };
             }
 
             const track = result.tracks[0];
@@ -65,20 +105,37 @@ module.exports = {
             };
 
             player.queue.add(track);
-            const position = player.queue.length;
+            if (!player.playing && !player.paused) {
+                await withTimeout(player.play(), 15000, 'Lavalink playback');
+            }
+
+            return { player, track };
+        };
+
+        try {
+            let result;
+            try {
+                result = await playAttempt(false);
+            } catch (firstError) {
+                console.warn('[RIFFY] First playback attempt failed; rebuilding the player:', firstError.message);
+                result = await playAttempt(true);
+            }
+
+            if (!result.track) {
+                return temporaryReply(message, `❌ No tracks found for **${query}**.`);
+            }
+
+            const position = result.player.queue.length;
             const reply = await message.reply(
-                `🎵 Added **${track.info.title}** to the queue.\n📍 Position: **#${position}**`
+                `🎵 Added **${result.track.info.title}** to the queue.\n📍 Position: **#${position}**`
             );
             setTimeout(() => reply.delete().catch(() => {}), 6000);
-
-            if (!player.playing && !player.paused) {
-                await player.play();
-            }
         } catch (error) {
             console.error('Prefix music play error:', error);
+            destroyGuildPlayer(client, guildId);
             return temporaryReply(
                 message,
-                '❌ I could not play that track. Try another title or URL.'
+                '❌ I could not play that track. I reset the stale player automatically; please try the command again.'
             );
         }
     }
