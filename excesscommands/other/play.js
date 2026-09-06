@@ -18,6 +18,20 @@ function withTimeout(promise, timeoutMs, label) {
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+const guildPlayLocks = new Map();
+
+function withGuildPlayLock(guildId, task) {
+    const previous = guildPlayLocks.get(guildId) || Promise.resolve();
+    const current = previous.catch(() => {}).then(task);
+    guildPlayLocks.set(guildId, current);
+
+    return current.finally(() => {
+        if (guildPlayLocks.get(guildId) === current) {
+            guildPlayLocks.delete(guildId);
+        }
+    });
+}
+
 function destroyGuildPlayer(client, guildId) {
     const player = client.riffy?.players.get(guildId);
     if (!player) return;
@@ -31,6 +45,48 @@ function destroyGuildPlayer(client, guildId) {
     if (client.riffy.players.get(guildId) === player) {
         client.riffy.players.delete(guildId);
     }
+}
+
+async function waitForConnectedNode(client, timeoutMs = 15000) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+        const node = client.riffy?.leastUsedNodes?.[0];
+        if (node?.connected) return node;
+
+        await new Promise(resolve => setTimeout(resolve, 250));
+    }
+
+    throw new Error('No Lavalink nodes are connected');
+}
+
+function isUsablePlayer(player, voiceChannelId) {
+    return Boolean(
+        player &&
+        player.voiceChannel === voiceChannelId &&
+        player.connected &&
+        player.connection &&
+        player.connection.isReady &&
+        player.node?.connected
+    );
+}
+
+function getPlaybackFailureMessage(error) {
+    const message = String(error?.message || error || '').toLowerCase();
+
+    if (message.includes('no lavalink nodes')) {
+        return 'Tidak ada server Lavalink yang sedang online.';
+    }
+
+    if (message.includes('timed out') || message.includes('timeout')) {
+        return 'Koneksi voice atau Lavalink belum siap. Tunggu beberapa detik lalu coba lagi.';
+    }
+
+    if (message.includes('no matches') || message.includes('load failed')) {
+        return 'Lavalink tidak dapat menemukan atau memuat lagu tersebut.';
+    }
+
+    return 'Server musik gagal memproses lagu tersebut. Coba lagi sebentar lagi.';
 }
 
 module.exports = {
@@ -63,80 +119,87 @@ module.exports = {
         }
 
         const guildId = message.guild.id;
-        const createPlayer = () => withTimeout(
-            client.riffy.createConnection({
-                guildId,
-                voiceChannel: voiceChannel.id,
-                textChannel: message.channel.id,
-                deaf: true
-            }),
-            15000,
-            'Lavalink voice connection'
-        );
-        const resolveTrack = () => withTimeout(
-            client.riffy.resolve({
-                query,
-                requester: message.author
-            }),
-            20000,
-            'Track search'
-        );
+        return withGuildPlayLock(guildId, async () => {
+            const createPlayer = () => {
+                return waitForConnectedNode(client).then(() => withTimeout(
+                    client.riffy.createConnection({
+                        guildId,
+                        voiceChannel: voiceChannel.id,
+                        textChannel: message.channel.id,
+                        deaf: true
+                    }),
+                    15000,
+                    'Lavalink voice connection'
+                ));
+            };
+            const resolveTrack = () => withTimeout(
+                client.riffy.resolve({
+                    query,
+                    requester: message.author
+                }),
+                20000,
+                'Track search'
+            );
 
-        const playAttempt = async (forceFresh) => {
-            if (forceFresh) {
-                destroyGuildPlayer(client, guildId);
-            }
+            const playAttempt = async (forceFresh) => {
+                if (forceFresh) {
+                    destroyGuildPlayer(client, guildId);
+                }
 
-            let player = client.riffy.players.get(guildId);
-            if (!player) {
-                player = await createPlayer();
-            }
+                await waitForConnectedNode(client);
 
-            const result = await resolveTrack();
-            if (!result?.tracks?.length) {
-                return { player, track: null };
-            }
+                let player = client.riffy.players.get(guildId);
+                if (!isUsablePlayer(player, voiceChannel.id)) {
+                    if (player) destroyGuildPlayer(client, guildId);
+                    player = await createPlayer();
+                }
 
-            const track = result.tracks[0];
-            track.requester = {
-                id: message.author.id,
-                username: message.author.username,
-                avatarURL: message.author.displayAvatarURL()
+                const result = await resolveTrack();
+                if (!result?.tracks?.length) {
+                    return { player, track: null };
+                }
+
+                const track = result.tracks[0];
+                track.requester = {
+                    id: message.author.id,
+                    username: message.author.username,
+                    avatarURL: message.author.displayAvatarURL()
+                };
+
+                player.queue.add(track);
+                if (!player.playing && !player.paused) {
+                    await withTimeout(player.play(), 20000, 'Lavalink playback');
+                }
+
+                return { player, track };
             };
 
-            player.queue.add(track);
-            if (!player.playing && !player.paused) {
-                await withTimeout(player.play(), 15000, 'Lavalink playback');
-            }
-
-            return { player, track };
-        };
-
-        try {
-            let result;
             try {
-                result = await playAttempt(false);
-            } catch (firstError) {
-                console.warn('[RIFFY] First playback attempt failed; rebuilding the player:', firstError.message);
-                result = await playAttempt(true);
-            }
+                let result;
+                try {
+                    result = await playAttempt(false);
+                } catch (firstError) {
+                    console.warn('[RIFFY] First playback attempt failed; rebuilding the player:', firstError.message);
+                    result = await playAttempt(true);
+                }
 
-            if (!result.track) {
-                return temporaryReply(message, `❌ No tracks found for **${query}**.`);
-            }
+                if (!result.track) {
+                    return temporaryReply(message, `❌ No tracks found for **${query}**.`);
+                }
 
-            const position = result.player.queue.length;
-            const reply = await message.reply(
-                `🎵 Added **${result.track.info.title}** to the queue.\n📍 Position: **#${position}**`
-            );
-            setTimeout(() => reply.delete().catch(() => {}), 6000);
-        } catch (error) {
-            console.error('Prefix music play error:', error);
-            destroyGuildPlayer(client, guildId);
-            return temporaryReply(
-                message,
-                '❌ I could not play that track. I reset the stale player automatically; please try the command again.'
-            );
-        }
+                const position = result.player.queue.length;
+                const reply = await message.reply(
+                    `🎵 Added **${result.track.info.title}** to the queue.\n📍 Position: **#${position}**`
+                );
+                setTimeout(() => reply.delete().catch(() => {}), 6000);
+            } catch (error) {
+                console.error('Prefix music play error:', error);
+                destroyGuildPlayer(client, guildId);
+                return temporaryReply(
+                    message,
+                    `❌ Saya tidak bisa memutar lagu itu.\n${getPlaybackFailureMessage(error)}\n\nCoba lagi setelah beberapa detik.`
+                );
+            }
+        });
     }
 };

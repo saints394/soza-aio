@@ -265,6 +265,9 @@ module.exports = (client) => {
             },
             defaultSearchPlatform: lavalinkConfig.lavalink.defaultSearchPlatform || "ytmsearch",
             restVersion: lavalinkConfig.lavalink.restVersion || "v4",
+            autoMigratePlayers: true,
+            migrateOnDisconnect: true,
+            migrateOnFailure: true,
         });
         
         client.riffy.on('nodeConnect', (node) => {
