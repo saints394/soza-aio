@@ -10,11 +10,16 @@ const voicePresenceSchema = new mongoose.Schema(
         },
         channelId: {
             type: String,
-            required: true
+            default: null
         },
         enabled: {
             type: Boolean,
             default: true
+        },
+        mode247: {
+            type: Boolean,
+            default: false,
+            index: true
         },
         requestedBy: {
             type: String,

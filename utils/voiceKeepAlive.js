@@ -310,6 +310,27 @@ async function disablePersistentVoice(client, guildId) {
     return Boolean(session || savedSession);
 }
 
+async function setPersistentVoiceMode(guildId, enabled) {
+    const existing = await VoicePresence.findOne({ guildId }).lean();
+    const record = await VoicePresence.findOneAndUpdate(
+        { guildId },
+        {
+            guildId,
+            channelId: existing?.channelId || null,
+            enabled: existing?.enabled ?? false,
+            mode247: enabled
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    return record;
+}
+
+async function isPersistentVoiceModeEnabled(guildId) {
+    const record = await VoicePresence.exists({ guildId, mode247: true });
+    return Boolean(record);
+}
+
 async function restorePersistentVoices(client) {
     const savedSessions = await VoicePresence.find({ enabled: true }).lean();
     let restored = 0;
@@ -340,5 +361,7 @@ async function restorePersistentVoices(client) {
 module.exports = {
     joinPersistentVoice,
     disablePersistentVoice,
+    setPersistentVoiceMode,
+    isPersistentVoiceModeEnabled,
     restorePersistentVoices
 };

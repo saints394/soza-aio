@@ -24,8 +24,7 @@ const { getData } = require('spotify-url-info')(fetch);
 const config = require('../../config.js');
 const { maximizeVoiceChannelBitrate } = require('../../utils/voiceQuality');
 const {
-    joinPersistentVoice,
-    disablePersistentVoice
+    setPersistentVoiceMode
 } = require('../../utils/voiceKeepAlive');
 
 const spotifyApi = new SpotifyWebApi({
@@ -203,45 +202,13 @@ module.exports = {
 
             if (subcommand === '247') {
                 const enabled = interaction.options.getBoolean('enabled', true);
+                await setPersistentVoiceMode(guildId, enabled);
 
-                if (!enabled) {
-                    const wasEnabled = await disablePersistentVoice(client, guildId);
-                    return interaction.editReply({
-                        content: wasEnabled
-                            ? '24/7 voice mode disabled. I left the persistent voice channel.'
-                            : '24/7 voice mode was already disabled.'
-                    });
-                }
-
-                if (!channel) {
-                    return interaction.editReply({
-                        content: 'Join a voice channel first, then enable 24/7 mode.'
-                    });
-                }
-
-                const permissions = channel.permissionsFor(client.user);
-                if (!permissions?.has(PermissionFlagsBits.Connect)) {
-                    return interaction.editReply({
-                        content: 'I need the Connect permission to join that voice channel.'
-                    });
-                }
-
-                try {
-                    const result = await joinPersistentVoice(client, channel, {
-                        requestedBy: userId
-                    });
-
-                    return interaction.editReply({
-                        content: result.alreadyConnected
-                            ? `24/7 mode is already enabled in **${channel.name}**. I will stay there when it is empty.`
-                            : `24/7 mode enabled in **${channel.name}**. I will stay connected when everyone leaves and reconnect automatically if needed.`
-                    });
-                } catch (error) {
-                    console.error('[VOICE 24/7] Failed to enable from /music 247:', error);
-                    return interaction.editReply({
-                        content: 'I could not enable 24/7 mode. Check my Connect permission and try again.'
-                    });
-                }
+                return interaction.editReply({
+                    content: enabled
+                        ? '**24/7 Mode**\n24/7 mode enabled. The bot will stay in the voice channel when the queue ends. Use `/join` separately to connect to a voice channel.'
+                        : '**24/7 Mode**\n24/7 mode disabled. The bot will leave normally when the queue ends.'
+                });
             }
 
       
