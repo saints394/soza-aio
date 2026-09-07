@@ -246,31 +246,51 @@ module.exports = (client) => {
     const youtubeFailoverAttempts = new Map();
     const queueEndingGuilds = new Set();
     const audioHealthTimers = new Map();
+    const audioHealthStates = new Map();
 
     const clearAudioHealthTimer = (guildId) => {
         const timer = audioHealthTimers.get(guildId);
-        if (timer) clearTimeout(timer);
+        if (timer) clearInterval(timer);
         audioHealthTimers.delete(guildId);
+        audioHealthStates.delete(guildId);
     };
 
     const scheduleAudioHealthCheck = (player, track) => {
         const guildId = player.guildId;
         clearAudioHealthTimer(guildId);
+        const state = {
+            lastPosition: Number(player.position) || 0,
+            lastProgressAt: Date.now(),
+            recovering: false
+        };
+        audioHealthStates.set(guildId, state);
 
         // TrackStart means Lavalink accepted the track, but a YouTube stream
-        // can still fail to deliver audio afterwards. Give the node enough
-        // time to send its first playerUpdate before treating it as silent.
-        const timer = setTimeout(async () => {
-            audioHealthTimers.delete(guildId);
+        // can still stop delivering audio a few seconds later. Keep checking
+        // the player position instead of only checking the initial startup.
+        const timer = setInterval(async () => {
+            if (state.recovering) return;
 
             if (
                 client.riffy.players.get(guildId) !== player ||
                 player.current !== track ||
                 !player.playing ||
                 player.paused ||
-                player.position > 1000 ||
                 track.info?.isStream
-            ) return;
+            ) {
+                clearAudioHealthTimer(guildId);
+                return;
+            }
+
+            const position = Number(player.position) || 0;
+            if (position > state.lastPosition + 750) {
+                state.lastPosition = position;
+                state.lastProgressAt = Date.now();
+                return;
+            }
+
+            if (Date.now() - state.lastProgressAt < 15000) return;
+            state.recovering = true;
 
             const attemptedNodes = youtubeFailoverAttempts.get(`${guildId}:${track.info?.identifier || track.info?.uri || track.info?.title || 'unknown'}`) || new Set();
             attemptedNodes.add(player.node?.name);
@@ -286,6 +306,7 @@ module.exports = (client) => {
                     );
                     await client.riffy.migrate(player, fallbackNode);
                     console.warn(`[V2 AUDIO WATCHDOG] No audio progress for "${track.info?.title || 'Unknown track'}"; moved to ${fallbackNode.name}`);
+                    clearAudioHealthTimer(guildId);
                     return;
                 }
 
@@ -295,11 +316,18 @@ module.exports = (client) => {
                     player.queue.unshift(track);
                     await player.play();
                     console.warn(`[V2 AUDIO WATCHDOG] No audio progress for "${track.info?.title || 'Unknown track'}"; retried on ${player.node?.name}`);
+                    state.lastPosition = 0;
+                    state.lastProgressAt = Date.now();
+                    state.recovering = false;
+                    return;
                 }
+
+                clearAudioHealthTimer(guildId);
             } catch (error) {
+                state.recovering = false;
                 console.error(`[V2 AUDIO WATCHDOG] Recovery failed for "${track.info?.title || 'Unknown track'}":`, error.message);
             }
-        }, 12000);
+        }, 5000);
 
         audioHealthTimers.set(guildId, timer);
     };
