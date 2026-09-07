@@ -242,8 +242,6 @@ const lyricIntervals = new Map();
 const queueDisplayTimeouts = new Map();
 
 module.exports = (client) => {
-    const fallbackTracks = new WeakSet();
-
     // Expose the shared message manager to prefix music commands so they
     // can clean up now-playing panels before destroying the Riffy player.
     client.musicMessageManager = advancedMessageManager;
@@ -264,7 +262,7 @@ module.exports = (client) => {
                 const guild = client.guilds.cache.get(payload.d.guild_id);
                 if (guild) guild.shard.send(payload);
             },
-            defaultSearchPlatform: lavalinkConfig.lavalink.defaultSearchPlatform || "ytsearch",
+            defaultSearchPlatform: lavalinkConfig.lavalink.defaultSearchPlatform || "ytmsearch",
             restVersion: lavalinkConfig.lavalink.restVersion || "v4",
             autoMigratePlayers: true,
             migrateOnDisconnect: true,
@@ -1748,8 +1746,6 @@ module.exports = (client) => {
             const exception = error?.exception || error || {};
             const errorMessage = exception.message || exception.cause || error?.message || 'Unknown Lavalink error';
             const trackInfo = track?.info || {};
-            const isYouTubeTrack = trackInfo.sourceName === 'youtube'
-                || /(?:youtube\.com|youtu\.be)/i.test(trackInfo.uri || '');
 
             console.error(`V2 Track error in guild ${player.guildId}:`, {
                 message: errorMessage,
@@ -1761,63 +1757,6 @@ module.exports = (client) => {
 
             const guildId = player.guildId;
             const channel = client.channels.cache.get(player.textChannel);
-
-            // A YouTube result can be searchable but still fail when Lavalink
-            // requests its stream. Try another accessible upload before
-            // reporting a hard failure, while keeping the same Riffy player.
-            if (isYouTubeTrack && !fallbackTracks.has(track) && player.queue.length === 0) {
-                const title = trackInfo.title || '';
-                const author = trackInfo.author || '';
-                const fallbackQueries = [
-                    `ytsearch:${title} ${author} audio`,
-                    `ytsearch:${title} ${author}`
-                ];
-
-                try {
-                    let fallbackTrack = null;
-
-                    for (const fallbackQuery of fallbackQueries) {
-                        const result = await client.riffy.resolve({
-                            query: fallbackQuery,
-                            requester: track.requester
-                        });
-
-                        fallbackTrack = result?.tracks?.find(candidate =>
-                            candidate?.info?.identifier &&
-                            candidate.info.identifier !== trackInfo.identifier
-                        );
-
-                        if (fallbackTrack) break;
-                    }
-
-                    if (fallbackTrack) {
-                        fallbackTrack.requester = track.requester;
-                        fallbackTracks.add(fallbackTrack);
-                        player.queue.add(fallbackTrack);
-                        player.stop();
-
-                        if (channel) {
-                            const fallbackContainer = advancedMessageManager.createV2Container('warning')
-                                .addTextDisplayComponents(
-                                    textDisplay => textDisplay.setContent(
-                                        `**🔁 ALTERNATE SOURCE USED**\n\nThe original YouTube stream for **${trackInfo.title || 'this track'}** was unavailable. Trying another accessible upload.`
-                                    )
-                                );
-
-                            const fallbackMessage = await channel.send({
-                                components: [fallbackContainer],
-                                flags: MessageFlags.IsComponentsV2
-                            });
-
-                            advancedMessageManager.addMessage(guildId, fallbackMessage.id, channel.id, 'warning');
-                        }
-
-                        return;
-                    }
-                } catch (fallbackError) {
-                    console.warn(`[MUSIC FALLBACK] Could not find an alternate source for ${trackInfo.title || 'track'}:`, fallbackError.message);
-                }
-            }
 
             if (channel) {
                 const errorContainer = advancedMessageManager.createV2Container('error')
