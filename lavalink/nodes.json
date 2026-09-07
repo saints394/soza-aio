@@ -26,5 +26,59 @@
     "password": "free",
     "secure": true,
     "name": "TriniumHost"
+  },
+  {
+    "Host" : "lavalink.oops.wtf",
+    "Port" : 443,
+    "Password" : "www.freelavalink.ga",
+    "Secure" : true
+  },
+  {
+    "Host" : "node1.kartadharta.xyz",
+    "Port" : 443,
+    "Password" : "kdlavalink",
+    "secure" : true
+  },
+  {
+    "Host" : "node1.gglvxd.tk",
+    "Port" : 443,
+    "Password" : "free",
+    "secure" : true
+  },
+  {
+    "Host" : "node2.gglvxd.tk",
+    "Port" : 443,
+    "Password" : "free",
+    "Secure" : true
+  },
+  {
+    "Host" : "lava.islantay.tk",
+    "Port" : 443,
+    "Password" : "AmeliaWatsonisTheBest**!",
+    "Secure" : true
+  },
+  {
+    "Host" : "jp-lava.islantay.tk",
+    "Port" : 443,
+    "Password" : "AmeliaWatsonisTheBest**!",
+    "Secure" : true
+  },
+  {
+    "Host" : "lavalink.botsuniversity.ml",
+    "Port" : 443,
+    "Password" : "mathiscool",
+    "Secure" : true
+  },
+  {
+    "Host" : "lavalink2.botsuniversity.ml",
+    "Port" : 443,
+    "Password" : "mathiscool",
+    "Secure" : true
+  },
+  {
+    "Host" : "krn.2d.gay",
+    "Port" : 443,
+    "Password" : "AWP)JQ$Gv9}dm.u",
+    "Secure" : true
   }
 ]
