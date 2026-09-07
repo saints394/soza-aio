@@ -21,9 +21,11 @@ class HighQualityYtDlpPlugin extends YtDlpPlugin {
             preferFreeFormats: true,
             skipDownload: true,
             simulate: true,
-            // Prefer YouTube's 48 kHz Opus stream before other audio formats.
-            format: 'bestaudio[acodec=opus]/bestaudio',
-            formatSort: 'abr,asr,quality'
+            // Keep the source in Opus at Discord's native 48 kHz when
+            // available. Falling back to the best audio source is safer than
+            // forcing a format that a particular YouTube client does not have.
+            format: 'bestaudio[acodec=opus][asr=48000]/bestaudio[acodec=opus]/bestaudio',
+            formatSort: 'acodec:opus,asr:48000,abr,quality'
         };
 
         if (fs.existsSync(cookiesPath)) {

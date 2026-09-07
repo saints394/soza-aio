@@ -24,8 +24,13 @@ const { getData } = require('spotify-url-info')(fetch);
 const config = require('../../config.js');
 const { maximizeVoiceChannelBitrate } = require('../../utils/voiceQuality');
 const {
-    setPersistentVoiceMode
+    setPersistentVoiceMode,
+    releasePersistentVoiceConnection
 } = require('../../utils/voiceKeepAlive');
+const {
+    setStablePlayerVolume,
+    hasActiveDisTubeQueue
+} = require('../../utils/musicAudio');
 
 const spotifyApi = new SpotifyWebApi({
     clientId: config.spotifyClientId,
@@ -290,6 +295,14 @@ module.exports = {
                 
                 if (!player) {
                     try {
+                        // Riffy must own the guild's only voice session. A
+                        // silent 24/7 connection or legacy DisTube queue can
+                        // otherwise cause doubled or unstable playback.
+                        await releasePersistentVoiceConnection(client, guildId);
+                        if (hasActiveDisTubeQueue(client, guildId)) {
+                            await client.distube.stop(guildId);
+                        }
+
                         player = await client.riffy.createConnection({
                             guildId,
                             voiceChannel: channel.id,
@@ -312,6 +325,8 @@ module.exports = {
                         return null;
                     }
                 }
+
+                setStablePlayerVolume(player);
                 
                 return player;
             };

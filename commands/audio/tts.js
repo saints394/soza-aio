@@ -31,6 +31,8 @@ const {
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const { releasePersistentVoiceConnection } = require('../../utils/voiceKeepAlive');
+const { hasActiveRiffyPlayer, hasActiveDisTubeQueue } = require('../../utils/musicAudio');
 
 const activeSessions = new Map();
 const messageQueue = new Map();
@@ -91,9 +93,17 @@ module.exports = {
             return this.sendError(interaction, 'I need permissions to join and speak in your voice channel!');
         }
 
+        if (
+            hasActiveRiffyPlayer(interaction.client, guildId) ||
+            hasActiveDisTubeQueue(interaction.client, guildId)
+        ) {
+            return this.sendError(interaction, 'Music is already playing in this server. Stop it before starting TTS Live.');
+        }
+
         const lang = interaction.options.getString('language') || 'en';
 
         try {
+            await releasePersistentVoiceConnection(interaction.client, guildId);
             const connection = joinVoiceChannel({
                 channelId: voiceChannel.id,
                 guildId: interaction.guild.id,

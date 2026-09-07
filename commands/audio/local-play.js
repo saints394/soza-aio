@@ -32,6 +32,8 @@ const {
 } = require('@discordjs/voice');
 const fs = require('fs');
 const path = require('path');
+const { releasePersistentVoiceConnection } = require('../../utils/voiceKeepAlive');
+const { hasActiveRiffyPlayer, hasActiveDisTubeQueue } = require('../../utils/musicAudio');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -232,6 +234,13 @@ module.exports = {
         }
 
         try {
+            if (
+                hasActiveRiffyPlayer(interaction.client, interaction.guild.id) ||
+                hasActiveDisTubeQueue(interaction.client, interaction.guild.id)
+            ) {
+                return this.sendError(interaction, 'Music is already playing in this server. Stop it before playing a local file.');
+            }
+            await releasePersistentVoiceConnection(interaction.client, interaction.guild.id);
       
             const connection = joinVoiceChannel({
                 channelId: voiceChannel.id,

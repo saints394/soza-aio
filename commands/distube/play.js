@@ -19,6 +19,8 @@ const { SlashCommandBuilder } = require('@discordjs/builders');
 const { ActionRowBuilder, ButtonBuilder, EmbedBuilder, ButtonStyle } = require('discord.js');
 const ytSearch = require('yt-search');
 const { maximizeVoiceChannelBitrate } = require('../../utils/voiceQuality');
+const { releasePersistentVoiceConnection } = require('../../utils/voiceKeepAlive');
+const { hasActiveRiffyPlayer } = require('../../utils/musicAudio');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -125,6 +127,17 @@ module.exports = {
     const query = interaction.options.getString('query') || interaction.options.getString('url');
     const channel = interaction.member.voice.channel;
     const distube = interaction.client.distube;
+
+    if (['play', 'url'].includes(subcommand)) {
+      // Keep one owner for each guild voice session. Starting DisTube while
+      // Riffy or the silent 24/7 player is connected can produce doubled
+      // audio and volume fluctuations.
+      if (hasActiveRiffyPlayer(interaction.client, interaction.guild.id)) {
+        const riffyPlayer = interaction.client.riffy.players.get(interaction.guild.id);
+        riffyPlayer?.destroy?.();
+      }
+      await releasePersistentVoiceConnection(interaction.client, interaction.guild.id);
+    }
 
     // Commands that don't require voice channel
     if (['queue', 'nowplaying'].includes(subcommand)) {

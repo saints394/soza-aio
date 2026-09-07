@@ -196,6 +196,12 @@ async function joinPersistentVoice(client, channel, { persist = true, requestedB
     }
 
     const guildId = channel.guild.id;
+    if (
+        client?.riffy?.players?.get(guildId) ||
+        client?.distube?.getQueue?.(guildId)
+    ) {
+        throw new Error('Music is already using this voice connection. Stop playback before enabling voice-only mode.');
+    }
     const currentSession = sessions.get(guildId);
 
     if (currentSession && currentSession.channelId !== channel.id) {
@@ -310,6 +316,25 @@ async function disablePersistentVoice(client, guildId) {
     return Boolean(session || savedSession);
 }
 
+// A music engine must own the guild's only Discord voice connection while it
+// is playing. This releases the silent 24/7 connection without disabling the
+// saved 24/7 preference, allowing the music engine to take over cleanly.
+async function releasePersistentVoiceConnection(client, guildId) {
+    const session = sessions.get(guildId);
+    if (!session) return false;
+
+    session.intentional = true;
+    clearSessionTimers(session);
+    stopSilentKeepAlive(session);
+
+    if (session.connection && session.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+        session.connection.destroy();
+    }
+
+    sessions.delete(guildId);
+    return true;
+}
+
 async function setPersistentVoiceMode(guildId, enabled) {
     const existing = await VoicePresence.findOne({ guildId }).lean();
     const record = await VoicePresence.findOneAndUpdate(
@@ -361,6 +386,7 @@ async function restorePersistentVoices(client) {
 module.exports = {
     joinPersistentVoice,
     disablePersistentVoice,
+    releasePersistentVoiceConnection,
     setPersistentVoiceMode,
     isPersistentVoiceModeEnabled,
     restorePersistentVoices
