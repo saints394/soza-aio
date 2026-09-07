@@ -60,15 +60,48 @@ async function waitForConnectedNode(client, timeoutMs = 15000) {
     throw new Error('No Lavalink nodes are connected');
 }
 
-function isUsablePlayer(player, voiceChannelId) {
+async function waitForPlayerReady(player, timeoutMs = 15000) {
+    if (!player?.connection) {
+        throw new Error('Lavalink player connection is unavailable');
+    }
+
+    await withTimeout(
+        player.connection.resolve(),
+        timeoutMs,
+        'Discord voice credentials'
+    );
+
+    if (!player.connection.isReady) {
+        throw new Error('Discord voice credentials are not ready');
+    }
+
+    if (!player.node?.connected) {
+        throw new Error('Lavalink node disconnected while joining voice');
+    }
+
+    return player;
+}
+
+function canReusePlayer(player, voiceChannelId) {
     return Boolean(
         player &&
         player.voiceChannel === voiceChannelId &&
         player.connected &&
-        player.connection &&
-        player.connection.isReady &&
         player.node?.connected
     );
+}
+
+function isConnectionFailure(error) {
+    const message = String(error?.message || error || '').toLowerCase();
+    return [
+        'connection',
+        'voice',
+        'node',
+        'credential',
+        'timeout',
+        'timed out',
+        'no lavalink'
+    ].some(term => message.includes(term));
 }
 
 function getPlaybackFailureMessage(error) {
@@ -149,10 +182,15 @@ module.exports = {
                 await waitForConnectedNode(client);
 
                 let player = client.riffy.players.get(guildId);
-                if (!isUsablePlayer(player, voiceChannel.id)) {
+                if (!canReusePlayer(player, voiceChannel.id)) {
                     if (player) destroyGuildPlayer(client, guildId);
                     player = await createPlayer();
                 }
+
+                // createConnection() only sends the Discord voice state. The
+                // voice credentials arrive asynchronously through raw gateway
+                // events, so wait for them before resolving or playing.
+                await waitForPlayerReady(player);
 
                 const result = await resolveTrack();
                 if (!result?.tracks?.length) {
@@ -179,7 +217,9 @@ module.exports = {
                 try {
                     result = await playAttempt(false);
                 } catch (firstError) {
-                    console.warn('[RIFFY] First playback attempt failed; rebuilding the player:', firstError.message);
+                    if (!isConnectionFailure(firstError)) throw firstError;
+
+                    console.warn('[RIFFY] Voice connection was not ready; rebuilding the player:', firstError.message);
                     result = await playAttempt(true);
                 }
 
