@@ -242,6 +242,8 @@ const lyricIntervals = new Map();
 const queueDisplayTimeouts = new Map();
 
 module.exports = (client) => {
+    const stuckTrackRetries = new WeakSet();
+
     // Expose the shared message manager to prefix music commands so they
     // can clean up now-playing panels before destroying the Riffy player.
     client.musicMessageManager = advancedMessageManager;
@@ -1740,6 +1742,41 @@ module.exports = (client) => {
         client.riffy.on('playerDestroy', async (player) => {
             const guildId = player.guildId;
             await handlePlayerCleanup(client, guildId, player, 'Player destroyed');
+        });
+
+        client.riffy.on('trackStuck', (player, track, payload) => {
+            const trackInfo = track?.info || {};
+            const guildId = player.guildId;
+
+            console.warn(`[V2 TRACK STUCK] Guild ${guildId}: ${trackInfo.title || 'Unknown track'} stalled after ${payload?.thresholdMs || 'unknown'}ms`);
+
+            // Riffy calls stop() immediately after emitting this event.
+            // Schedule recovery so the new play request is not overwritten
+            // by that stop operation.
+            setTimeout(async () => {
+                try {
+                    // If there are queued tracks, start the next one instead
+                    // of leaving the player silent while the UI still shows
+                    // the old session.
+                    if (player.queue.length > 0) {
+                        await player.play();
+                        return;
+                    }
+
+                    // A single track may stall because its source stream
+                    // paused. Retry it once through the same player.
+                    if (track && typeof track === 'object' && !stuckTrackRetries.has(track)) {
+                        stuckTrackRetries.add(track);
+                        player.queue.unshift(track);
+                        await player.play();
+                        return;
+                    }
+
+                    console.warn(`[V2 TRACK STUCK] Retry exhausted in guild ${guildId}`);
+                } catch (retryError) {
+                    console.error(`[V2 TRACK STUCK] Recovery failed in guild ${guildId}:`, retryError);
+                }
+            }, 0);
         });
 
         client.riffy.on('trackError', async (player, track, error) => {
