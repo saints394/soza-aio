@@ -245,6 +245,64 @@ module.exports = (client) => {
     const stuckTrackRetries = new WeakSet();
     const youtubeFailoverAttempts = new Map();
     const queueEndingGuilds = new Set();
+    const audioHealthTimers = new Map();
+
+    const clearAudioHealthTimer = (guildId) => {
+        const timer = audioHealthTimers.get(guildId);
+        if (timer) clearTimeout(timer);
+        audioHealthTimers.delete(guildId);
+    };
+
+    const scheduleAudioHealthCheck = (player, track) => {
+        const guildId = player.guildId;
+        clearAudioHealthTimer(guildId);
+
+        // TrackStart means Lavalink accepted the track, but a YouTube stream
+        // can still fail to deliver audio afterwards. Give the node enough
+        // time to send its first playerUpdate before treating it as silent.
+        const timer = setTimeout(async () => {
+            audioHealthTimers.delete(guildId);
+
+            if (
+                client.riffy.players.get(guildId) !== player ||
+                player.current !== track ||
+                !player.playing ||
+                player.paused ||
+                player.position > 1000 ||
+                track.info?.isStream
+            ) return;
+
+            const attemptedNodes = youtubeFailoverAttempts.get(`${guildId}:${track.info?.identifier || track.info?.uri || track.info?.title || 'unknown'}`) || new Set();
+            attemptedNodes.add(player.node?.name);
+            const fallbackNode = [...client.riffy.nodeMap.values()]
+                .filter(node => node.connected && node !== player.node && !attemptedNodes.has(node.name))
+                .sort((a, b) => a.penalties - b.penalties)[0];
+
+            try {
+                if (fallbackNode) {
+                    youtubeFailoverAttempts.set(
+                        `${guildId}:${track.info?.identifier || track.info?.uri || track.info?.title || 'unknown'}`,
+                        attemptedNodes
+                    );
+                    await client.riffy.migrate(player, fallbackNode);
+                    console.warn(`[V2 AUDIO WATCHDOG] No audio progress for "${track.info?.title || 'Unknown track'}"; moved to ${fallbackNode.name}`);
+                    return;
+                }
+
+                if (!stuckTrackRetries.has(track)) {
+                    stuckTrackRetries.add(track);
+                    player.stop();
+                    player.queue.unshift(track);
+                    await player.play();
+                    console.warn(`[V2 AUDIO WATCHDOG] No audio progress for "${track.info?.title || 'Unknown track'}"; retried on ${player.node?.name}`);
+                }
+            } catch (error) {
+                console.error(`[V2 AUDIO WATCHDOG] Recovery failed for "${track.info?.title || 'Unknown track'}":`, error.message);
+            }
+        }, 12000);
+
+        audioHealthTimers.set(guildId, timer);
+    };
 
     // Expose the shared message manager to prefix music commands so they
     // can clean up now-playing panels before destroying the Riffy player.
@@ -325,6 +383,7 @@ module.exports = (client) => {
             try {
                 const trackKey = `${player.guildId}:${track?.info?.identifier || track?.info?.uri || track?.info?.title || 'unknown'}`;
                 youtubeFailoverAttempts.delete(trackKey);
+                scheduleAudioHealthCheck(player, track);
 
                 const channel = client.channels.cache.get(player.textChannel);
                 const guildId = player.guildId;
@@ -535,6 +594,7 @@ module.exports = (client) => {
         client.riffy.on('trackEnd', async (player) => {
             try {
                 const guildId = player.guildId;
+                clearAudioHealthTimer(guildId);
 
              
                 lyricsStateManager.clearGuild(guildId);
@@ -569,6 +629,7 @@ module.exports = (client) => {
 
         client.riffy.on("queueEnd", async (player) => {
             const guildId = player.guildId;
+            clearAudioHealthTimer(guildId);
             if (queueEndingGuilds.has(guildId)) return;
             queueEndingGuilds.add(guildId);
 
@@ -1770,6 +1831,7 @@ module.exports = (client) => {
 
         client.riffy.on('playerDestroy', async (player) => {
             const guildId = player.guildId;
+            clearAudioHealthTimer(guildId);
             await handlePlayerCleanup(client, guildId, player, 'Player destroyed');
         });
 
