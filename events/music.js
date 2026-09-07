@@ -286,6 +286,9 @@ module.exports = (client) => {
             if (position > state.lastPosition + 750) {
                 state.lastPosition = position;
                 state.lastProgressAt = Date.now();
+                youtubeFailoverAttempts.delete(
+                    `${guildId}:${track.info?.identifier || track.info?.uri || track.info?.title || 'unknown'}`
+                );
                 return;
             }
 
@@ -410,7 +413,6 @@ module.exports = (client) => {
         client.riffy.on('trackStart', async (player, track) => {
             try {
                 const trackKey = `${player.guildId}:${track?.info?.identifier || track?.info?.uri || track?.info?.title || 'unknown'}`;
-                youtubeFailoverAttempts.delete(trackKey);
                 scheduleAudioHealthCheck(player, track);
 
                 const channel = client.channels.cache.get(player.textChannel);
@@ -622,6 +624,9 @@ module.exports = (client) => {
         client.riffy.on('trackEnd', async (player) => {
             try {
                 const guildId = player.guildId;
+                youtubeFailoverAttempts.delete(
+                    `${guildId}:${player.current?.info?.identifier || player.current?.info?.uri || player.current?.info?.title || 'unknown'}`
+                );
                 clearAudioHealthTimer(guildId);
 
              
