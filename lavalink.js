@@ -32,7 +32,7 @@ module.exports = {
     enabled: true,
     lavalink: {
         nodes,
-        defaultSearchPlatform: process.env.LAVALINK_SEARCH_PLATFORM || "ytmsearch",
+        defaultSearchPlatform: process.env.LAVALINK_SEARCH_PLATFORM || "ytsearch",
         restVersion: "v4"
     }
 };
