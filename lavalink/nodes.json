@@ -80,5 +80,10 @@
     "Port" : 443,
     "Password" : "AWP)JQ$Gv9}dm.u",
     "Secure" : true
+  },
+  {
+    "Host" : "server.relocation.tk",
+    "Port" : 1032,
+    "Password" : "youshallnotpass"
   }
 ]
