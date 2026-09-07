@@ -243,6 +243,7 @@ const queueDisplayTimeouts = new Map();
 
 module.exports = (client) => {
     const stuckTrackRetries = new WeakSet();
+    const youtubeFailoverAttempts = new Map();
 
     // Expose the shared message manager to prefix music commands so they
     // can clean up now-playing panels before destroying the Riffy player.
@@ -321,6 +322,9 @@ module.exports = (client) => {
 
         client.riffy.on('trackStart', async (player, track) => {
             try {
+                const trackKey = `${player.guildId}:${track?.info?.identifier || track?.info?.uri || track?.info?.title || 'unknown'}`;
+                youtubeFailoverAttempts.delete(trackKey);
+
                 const channel = client.channels.cache.get(player.textChannel);
                 const guildId = player.guildId;
 
@@ -1783,6 +1787,36 @@ module.exports = (client) => {
             const exception = error?.exception || error || {};
             const errorMessage = exception.message || exception.cause || error?.message || 'Unknown Lavalink error';
             const trackInfo = track?.info || {};
+            const trackKey = `${player.guildId}:${trackInfo.identifier || trackInfo.uri || trackInfo.title || 'unknown'}`;
+            const isYouTubeTrack = trackInfo.sourceName === 'youtube' && track;
+
+            // YouTube extraction can fail on one public Lavalink node while
+            // working on another. Riffy emits trackError before stopping the
+            // player, so wait one tick and migrate the current track to a
+            // different connected node before showing an error to users.
+            if (isYouTubeTrack) {
+                const attempts = youtubeFailoverAttempts.get(trackKey) || new Set();
+                attempts.add(player.node?.name);
+
+                const fallbackNode = [...client.riffy.nodeMap.values()]
+                    .filter(node => node.connected && node !== player.node && !attempts.has(node.name))
+                    .sort((a, b) => a.penalties - b.penalties)[0];
+
+                if (fallbackNode) {
+                    youtubeFailoverAttempts.set(trackKey, attempts);
+                    setTimeout(async () => {
+                        try {
+                            await client.riffy.migrate(player, fallbackNode);
+                            console.warn(`[V2 TRACK FAILOVER] Retrying "${trackInfo.title || 'Unknown track'}" on node ${fallbackNode.name}`);
+                        } catch (migrationError) {
+                            console.error(`[V2 TRACK FAILOVER] Could not move "${trackInfo.title || 'Unknown track'}":`, migrationError.message);
+                        }
+                    }, 0);
+                    return;
+                }
+
+                youtubeFailoverAttempts.delete(trackKey);
+            }
 
             console.error(`V2 Track error in guild ${player.guildId}:`, {
                 message: errorMessage,
@@ -1810,7 +1844,11 @@ module.exports = (client) => {
             }
 
             if (player.queue.length > 0) {
-                player.stop();
+                setTimeout(() => {
+                    player.play().catch(nextError => {
+                        console.error(`[V2 TRACK ERROR] Could not continue queue in guild ${player.guildId}:`, nextError.message);
+                    });
+                }, 0);
             }
         });
 
