@@ -36,7 +36,6 @@ const {
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { releasePersistentVoiceConnection } = require('../../utils/voiceKeepAlive');
 const { hasActiveRiffyPlayer, hasActiveDisTubeQueue } = require('../../utils/musicAudio');
 
 
@@ -166,7 +165,6 @@ module.exports = {
             ) {
                 return this.sendError(interaction, 'Music is already playing in this server. Stop it before playing a sound effect.');
             }
-            await releasePersistentVoiceConnection(interaction.client, interaction.guild.id);
            
             const tempDir = path.join(__dirname, '../../temp');
             if (!fs.existsSync(tempDir)) {

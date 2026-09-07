@@ -24,10 +24,6 @@ const { getData } = require('spotify-url-info')(fetch);
 const config = require('../../config.js');
 const { maximizeVoiceChannelBitrate } = require('../../utils/voiceQuality');
 const {
-    setPersistentVoiceMode,
-    releasePersistentVoiceConnection
-} = require('../../utils/voiceKeepAlive');
-const {
     setStablePlayerVolume,
     hasActiveDisTubeQueue
 } = require('../../utils/musicAudio');
@@ -168,14 +164,6 @@ module.exports = {
                         .setRequired(true)))
         .addSubcommand(subcommand =>
             subcommand
-                .setName('247')
-                .setDescription('Keep the bot connected when the voice channel is empty.')
-                .addBooleanOption(option =>
-                    option.setName('enabled')
-                        .setDescription('Enable or disable 24/7 voice mode.')
-                        .setRequired(true)))
-        .addSubcommand(subcommand =>
-            subcommand
                 .setName('addsong')
                 .setDescription('Add a song to a playlist.')
                 .addStringOption(option =>
@@ -205,36 +193,6 @@ module.exports = {
             const { channel } = member.voice;
             const client = interaction.client;
 
-            if (subcommand === '247') {
-                const enabled = interaction.options.getBoolean('enabled', true);
-                await interaction.editReply({
-                    content: 'Updating 24/7 mode...'
-                });
-
-                try {
-                    await Promise.race([
-                        setPersistentVoiceMode(guildId, enabled),
-                        new Promise((_, reject) => {
-                            setTimeout(() => {
-                                reject(new Error('Updating 24/7 mode timed out after 10 seconds.'));
-                            }, 10000);
-                        })
-                    ]);
-
-                    return interaction.editReply({
-                        content: enabled
-                            ? '**24/7 Mode**\n24/7 mode enabled. The bot will stay in the voice channel when the queue ends. Use `/join` separately to connect to a voice channel.'
-                            : '**24/7 Mode**\n24/7 mode disabled. The bot will leave normally when the queue ends.'
-                    });
-                } catch (error) {
-                    console.error('[VOICE 24/7] Failed to update mode:', error);
-                    return interaction.editReply({
-                        content: 'I could not update 24/7 mode. The database may be unavailable; please try again.'
-                    });
-                }
-            }
-
-      
             const checkVoiceChannel = async () => {
                 if (!channel) {
                     const errorContainer = new ContainerBuilder()
@@ -296,9 +254,8 @@ module.exports = {
                 if (!player) {
                     try {
                         // Riffy must own the guild's only voice session. A
-                        // silent 24/7 connection or legacy DisTube queue can
-                        // otherwise cause doubled or unstable playback.
-                        await releasePersistentVoiceConnection(client, guildId);
+                        // legacy DisTube queue can otherwise cause doubled or
+                        // unstable playback.
                         if (hasActiveDisTubeQueue(client, guildId)) {
                             await client.distube.stop(guildId);
                         }

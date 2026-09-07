@@ -6,7 +6,6 @@ const axios = require('axios');
 const musicIcons = require('../UI/icons/musicicons');
 const { Riffy } = require('riffy');
 const { autoplayCollection } = require('../mongodb');
-const { isPersistentVoiceModeEnabled } = require('../utils/voiceKeepAlive');
 
 
 const lyricsStateManager = {
@@ -281,12 +280,9 @@ module.exports = (client) => {
         client.on('voiceStateUpdate', async (oldState, newState) => {
             try {
                 if (oldState.member.id === client.user.id && oldState.channelId && !newState.channelId) {
-                    const keepAlive = await isPersistentVoiceModeEnabled(oldState.guild.id);
-                    if (!keepAlive) {
-                        const player = client.riffy.players.get(oldState.guild.id);
-                        if (player) {
-                            await handlePlayerCleanup(client, oldState.guild.id, player, 'Bot disconnected');
-                        }
+                    const player = client.riffy.players.get(oldState.guild.id);
+                    if (player) {
+                        await handlePlayerCleanup(client, oldState.guild.id, player, 'Bot disconnected');
                     }
                 }
 
@@ -296,9 +292,6 @@ module.exports = (client) => {
                     newState.guild.channels.cache.get(oldState.channelId)?.members.size === 1 &&
                     newState.guild.channels.cache.get(oldState.channelId)?.members.has(client.user.id)
                 ) {
-                    const keepAlive = await isPersistentVoiceModeEnabled(oldState.guild.id);
-                    if (keepAlive) return;
-
                     const player = client.riffy.players.get(oldState.guild.id);
                     if (player) {
                         await handlePlayerCleanup(client, oldState.guild.id, player, 'Channel empty - Auto disconnect');
@@ -328,7 +321,6 @@ module.exports = (client) => {
             try {
                 const channel = client.channels.cache.get(player.textChannel);
                 const guildId = player.guildId;
-                const keepAlive = await isPersistentVoiceModeEnabled(guildId);
 
                 if (!channel) return;
 
@@ -626,9 +618,7 @@ module.exports = (client) => {
                     }
 
                 } else {
-                    if (!keepAlive) {
-                        player.destroy();
-                    }
+                    player.destroy();
 
                     const queueEndContainer = advancedMessageManager.createV2Container('session_end')
                         .addTextDisplayComponents(
@@ -637,8 +627,8 @@ module.exports = (client) => {
                         .addSeparatorComponents(separator => separator)
                         .addTextDisplayComponents(
                             textDisplay => textDisplay.setContent(
-                                keepAlive
-                                    ? '**All tracks have been played successfully!**\n\n**24/7 Mode is active.**\n• ✅ Playback completed without errors\n• 🔊 The bot will remain in the voice channel\n• 🧹 Playback resources cleaned up\n\n*Use `/music play` to add more music.*'
+                                false
+                                    ? ''
                                     : '**All tracks have been played successfully!**\n\n**📊 Session Summary:**\n• ✅ Playback completed without errors\n• 🔌 Player disconnected from voice channel\n• 🧹 All resources cleaned up automatically\n• 🎤 Lyrics sessions terminated\n• 📝 Message cache cleared\n\n*Ready for your next music session!*'
                             )
                         )

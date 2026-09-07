@@ -31,7 +31,6 @@ const {
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { releasePersistentVoiceConnection } = require('../../utils/voiceKeepAlive');
 const { hasActiveRiffyPlayer, hasActiveDisTubeQueue } = require('../../utils/musicAudio');
 
 const activeSessions = new Map();
@@ -103,7 +102,6 @@ module.exports = {
         const lang = interaction.options.getString('language') || 'en';
 
         try {
-            await releasePersistentVoiceConnection(interaction.client, guildId);
             const connection = joinVoiceChannel({
                 channelId: voiceChannel.id,
                 guildId: interaction.guild.id,
