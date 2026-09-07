@@ -244,6 +244,7 @@ const queueDisplayTimeouts = new Map();
 module.exports = (client) => {
     const stuckTrackRetries = new WeakSet();
     const youtubeFailoverAttempts = new Map();
+    const queueEndingGuilds = new Set();
 
     // Expose the shared message manager to prefix music commands so they
     // can clean up now-playing panels before destroying the Riffy player.
@@ -567,18 +568,35 @@ module.exports = (client) => {
         });
 
         client.riffy.on("queueEnd", async (player) => {
+            const guildId = player.guildId;
+            if (queueEndingGuilds.has(guildId)) return;
+            queueEndingGuilds.add(guildId);
+
             try {
                 const channel = client.channels.cache.get(player.textChannel);
-                const guildId = player.guildId;
 
-                if (!channel) return;
-
-                await handlePlayerCleanup(client, guildId, player, 'Queue ended');
+                if (!channel) {
+                    if (client.riffy.players.get(guildId) === player) player.destroy();
+                    return;
+                }
 
                 const result = await autoplayCollection.findOne({ guildId }).catch(() => null);
                 const autoplay = result ? result.autoplay : false;
 
                 if (autoplay) {
+                    await handlePlayerCleanup(client, guildId, player, 'Queue ended');
+
+                    // A new /music play or .play may have arrived while the
+                    // autoplay lookup/cleanup was running. Do not let
+                    // autoplay add a track to a session that is already
+                    // active again.
+                    if (
+                        client.riffy.players.get(guildId) !== player ||
+                        player.playing ||
+                        player.paused ||
+                        player.queue.length > 0
+                    ) return;
+
                     const autoplayContainer = advancedMessageManager.createV2Container('autoplay')
                         .addTextDisplayComponents(
                             textDisplay => textDisplay.setContent('**🔄 AUTOPLAY ACTIVE**\nSearching for similar tracks...\n\n*Continuous music experience enabled.*')
@@ -624,7 +642,12 @@ module.exports = (client) => {
                     }
 
                 } else {
-                    player.destroy();
+                    // Remove the player from Riffy's map before any awaited
+                    // cleanup or Discord API calls. Otherwise a new play
+                    // request can reuse this ended player and have it
+                    // destroyed when this handler resumes.
+                    if (client.riffy.players.get(guildId) === player) player.destroy();
+                    await handlePlayerCleanup(client, guildId, player, 'Queue ended');
 
                     const queueEndContainer = advancedMessageManager.createV2Container('session_end')
                         .addTextDisplayComponents(
@@ -655,6 +678,8 @@ module.exports = (client) => {
 
             } catch (error) {
                 console.error('V2 Queue end error:', error);
+            } finally {
+                queueEndingGuilds.delete(guildId);
             }
         });
 
