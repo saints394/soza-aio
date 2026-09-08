@@ -243,97 +243,6 @@ const queueDisplayTimeouts = new Map();
 
 module.exports = (client) => {
     const stuckTrackRetries = new WeakSet();
-    const youtubeFailoverAttempts = new Map();
-    const queueEndingGuilds = new Set();
-    const audioHealthTimers = new Map();
-    const audioHealthStates = new Map();
-
-    const clearAudioHealthTimer = (guildId) => {
-        const timer = audioHealthTimers.get(guildId);
-        if (timer) clearInterval(timer);
-        audioHealthTimers.delete(guildId);
-        audioHealthStates.delete(guildId);
-    };
-
-    const scheduleAudioHealthCheck = (player, track) => {
-        const guildId = player.guildId;
-        clearAudioHealthTimer(guildId);
-        const state = {
-            lastPosition: Number(player.position) || 0,
-            lastProgressAt: Date.now(),
-            recovering: false
-        };
-        audioHealthStates.set(guildId, state);
-
-        // TrackStart means Lavalink accepted the track, but a YouTube stream
-        // can still stop delivering audio a few seconds later. Keep checking
-        // the player position instead of only checking the initial startup.
-        const timer = setInterval(async () => {
-            if (state.recovering) return;
-
-            if (
-                client.riffy.players.get(guildId) !== player ||
-                player.current !== track ||
-                !player.playing ||
-                player.paused ||
-                track.info?.isStream
-            ) {
-                clearAudioHealthTimer(guildId);
-                return;
-            }
-
-            const position = Number(player.position) || 0;
-            if (position > state.lastPosition + 750) {
-                state.lastPosition = position;
-                state.lastProgressAt = Date.now();
-                youtubeFailoverAttempts.delete(
-                    `${guildId}:${track.info?.identifier || track.info?.uri || track.info?.title || 'unknown'}`
-                );
-                return;
-            }
-
-            if (Date.now() - state.lastProgressAt < 15000) return;
-            state.recovering = true;
-
-            const attemptedNodes = youtubeFailoverAttempts.get(`${guildId}:${track.info?.identifier || track.info?.uri || track.info?.title || 'unknown'}`) || new Set();
-            attemptedNodes.add(player.node?.name);
-            const fallbackNode = [...client.riffy.nodeMap.values()]
-                .filter(node => node.connected && node !== player.node && !attemptedNodes.has(node.name))
-                .sort((a, b) => a.penalties - b.penalties)[0];
-
-            try {
-                if (fallbackNode) {
-                    youtubeFailoverAttempts.set(
-                        `${guildId}:${track.info?.identifier || track.info?.uri || track.info?.title || 'unknown'}`,
-                        attemptedNodes
-                    );
-                    await client.riffy.migrate(player, fallbackNode);
-                    console.warn(`[V2 AUDIO WATCHDOG] No audio progress for "${track.info?.title || 'Unknown track'}"; moved to ${fallbackNode.name}`);
-                    clearAudioHealthTimer(guildId);
-                    return;
-                }
-
-                if (!stuckTrackRetries.has(track)) {
-                    stuckTrackRetries.add(track);
-                    player.stop();
-                    player.queue.unshift(track);
-                    await player.play();
-                    console.warn(`[V2 AUDIO WATCHDOG] No audio progress for "${track.info?.title || 'Unknown track'}"; retried on ${player.node?.name}`);
-                    state.lastPosition = 0;
-                    state.lastProgressAt = Date.now();
-                    state.recovering = false;
-                    return;
-                }
-
-                clearAudioHealthTimer(guildId);
-            } catch (error) {
-                state.recovering = false;
-                console.error(`[V2 AUDIO WATCHDOG] Recovery failed for "${track.info?.title || 'Unknown track'}":`, error.message);
-            }
-        }, 5000);
-
-        audioHealthTimers.set(guildId, timer);
-    };
 
     // Expose the shared message manager to prefix music commands so they
     // can clean up now-playing panels before destroying the Riffy player.
@@ -412,9 +321,6 @@ module.exports = (client) => {
 
         client.riffy.on('trackStart', async (player, track) => {
             try {
-                const trackKey = `${player.guildId}:${track?.info?.identifier || track?.info?.uri || track?.info?.title || 'unknown'}`;
-                scheduleAudioHealthCheck(player, track);
-
                 const channel = client.channels.cache.get(player.textChannel);
                 const guildId = player.guildId;
 
@@ -624,10 +530,6 @@ module.exports = (client) => {
         client.riffy.on('trackEnd', async (player) => {
             try {
                 const guildId = player.guildId;
-                youtubeFailoverAttempts.delete(
-                    `${guildId}:${player.current?.info?.identifier || player.current?.info?.uri || player.current?.info?.title || 'unknown'}`
-                );
-                clearAudioHealthTimer(guildId);
 
              
                 lyricsStateManager.clearGuild(guildId);
@@ -661,36 +563,18 @@ module.exports = (client) => {
         });
 
         client.riffy.on("queueEnd", async (player) => {
-            const guildId = player.guildId;
-            clearAudioHealthTimer(guildId);
-            if (queueEndingGuilds.has(guildId)) return;
-            queueEndingGuilds.add(guildId);
-
             try {
                 const channel = client.channels.cache.get(player.textChannel);
+                const guildId = player.guildId;
 
-                if (!channel) {
-                    if (client.riffy.players.get(guildId) === player) player.destroy();
-                    return;
-                }
+                if (!channel) return;
+
+                await handlePlayerCleanup(client, guildId, player, 'Queue ended');
 
                 const result = await autoplayCollection.findOne({ guildId }).catch(() => null);
                 const autoplay = result ? result.autoplay : false;
 
                 if (autoplay) {
-                    await handlePlayerCleanup(client, guildId, player, 'Queue ended');
-
-                    // A new /music play or .play may have arrived while the
-                    // autoplay lookup/cleanup was running. Do not let
-                    // autoplay add a track to a session that is already
-                    // active again.
-                    if (
-                        client.riffy.players.get(guildId) !== player ||
-                        player.playing ||
-                        player.paused ||
-                        player.queue.length > 0
-                    ) return;
-
                     const autoplayContainer = advancedMessageManager.createV2Container('autoplay')
                         .addTextDisplayComponents(
                             textDisplay => textDisplay.setContent('**🔄 AUTOPLAY ACTIVE**\nSearching for similar tracks...\n\n*Continuous music experience enabled.*')
@@ -736,12 +620,7 @@ module.exports = (client) => {
                     }
 
                 } else {
-                    // Remove the player from Riffy's map before any awaited
-                    // cleanup or Discord API calls. Otherwise a new play
-                    // request can reuse this ended player and have it
-                    // destroyed when this handler resumes.
-                    if (client.riffy.players.get(guildId) === player) player.destroy();
-                    await handlePlayerCleanup(client, guildId, player, 'Queue ended');
+                    player.destroy();
 
                     const queueEndContainer = advancedMessageManager.createV2Container('session_end')
                         .addTextDisplayComponents(
@@ -772,8 +651,6 @@ module.exports = (client) => {
 
             } catch (error) {
                 console.error('V2 Queue end error:', error);
-            } finally {
-                queueEndingGuilds.delete(guildId);
             }
         });
 
@@ -1864,7 +1741,6 @@ module.exports = (client) => {
 
         client.riffy.on('playerDestroy', async (player) => {
             const guildId = player.guildId;
-            clearAudioHealthTimer(guildId);
             await handlePlayerCleanup(client, guildId, player, 'Player destroyed');
         });
 
@@ -1907,36 +1783,6 @@ module.exports = (client) => {
             const exception = error?.exception || error || {};
             const errorMessage = exception.message || exception.cause || error?.message || 'Unknown Lavalink error';
             const trackInfo = track?.info || {};
-            const trackKey = `${player.guildId}:${trackInfo.identifier || trackInfo.uri || trackInfo.title || 'unknown'}`;
-            const isYouTubeTrack = trackInfo.sourceName === 'youtube' && track;
-
-            // YouTube extraction can fail on one public Lavalink node while
-            // working on another. Riffy emits trackError before stopping the
-            // player, so wait one tick and migrate the current track to a
-            // different connected node before showing an error to users.
-            if (isYouTubeTrack) {
-                const attempts = youtubeFailoverAttempts.get(trackKey) || new Set();
-                attempts.add(player.node?.name);
-
-                const fallbackNode = [...client.riffy.nodeMap.values()]
-                    .filter(node => node.connected && node !== player.node && !attempts.has(node.name))
-                    .sort((a, b) => a.penalties - b.penalties)[0];
-
-                if (fallbackNode) {
-                    youtubeFailoverAttempts.set(trackKey, attempts);
-                    setTimeout(async () => {
-                        try {
-                            await client.riffy.migrate(player, fallbackNode);
-                            console.warn(`[V2 TRACK FAILOVER] Retrying "${trackInfo.title || 'Unknown track'}" on node ${fallbackNode.name}`);
-                        } catch (migrationError) {
-                            console.error(`[V2 TRACK FAILOVER] Could not move "${trackInfo.title || 'Unknown track'}":`, migrationError.message);
-                        }
-                    }, 0);
-                    return;
-                }
-
-                youtubeFailoverAttempts.delete(trackKey);
-            }
 
             console.error(`V2 Track error in guild ${player.guildId}:`, {
                 message: errorMessage,
@@ -1964,11 +1810,7 @@ module.exports = (client) => {
             }
 
             if (player.queue.length > 0) {
-                setTimeout(() => {
-                    player.play().catch(nextError => {
-                        console.error(`[V2 TRACK ERROR] Could not continue queue in guild ${player.guildId}:`, nextError.message);
-                    });
-                }, 0);
+                player.stop();
             }
         });
 
@@ -2017,17 +1859,7 @@ module.exports = (client) => {
 
         client.on('raw', d => client.riffy.updateVoiceState(d));
 
-        client.once('clientReady', () => {
-            client.riffy.init(client.user.id);
-            console.log('\x1b[35m[ V2 MUSIC ]\x1b[0m', '\x1b[32mAdvanced V2 Music System Active ✅\x1b[0m');
-
-            setTimeout(async () => {
-                for (const guild of client.guilds.cache.values()) {
-                    await advancedMessageManager.cleanupGuildMessages(client, guild.id);
-                }
-            }, 5000);
-        });
-                const initializeRiffy = async () => {
+        const initializeRiffy = async () => {
             try {
                 if (!client.isReady()) {
                     //console.log('\x1b[33m[ V2 LAVALINK ]\x1b[0m Waiting for client to be ready...');
