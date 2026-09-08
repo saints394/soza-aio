@@ -243,6 +243,7 @@ const queueDisplayTimeouts = new Map();
 
 module.exports = (client) => {
     const stuckTrackRetries = new WeakSet();
+    const trackErrorRetries = new WeakSet();
 
     // Expose the shared message manager to prefix music commands so they
     // can clean up now-playing panels before destroying the Riffy player.
@@ -321,6 +322,7 @@ module.exports = (client) => {
 
         client.riffy.on('trackStart', async (player, track) => {
             try {
+                player.__recoveringTrackError = false;
                 const channel = client.channels.cache.get(player.textChannel);
                 const guildId = player.guildId;
 
@@ -564,6 +566,10 @@ module.exports = (client) => {
 
         client.riffy.on("queueEnd", async (player) => {
             try {
+                // A failed YouTube stream may temporarily leave the queue empty
+                // while trackError searches for a playable alternative.
+                if (player.__recoveringTrackError) return;
+
                 const channel = client.channels.cache.get(player.textChannel);
                 const guildId = player.guildId;
 
@@ -1783,8 +1789,10 @@ module.exports = (client) => {
             const exception = error?.exception || error || {};
             const errorMessage = exception.message || exception.cause || error?.message || 'Unknown Lavalink error';
             const trackInfo = track?.info || {};
+            const guildId = player.guildId;
+            const channel = client.channels.cache.get(player.textChannel);
 
-            console.error(`V2 Track error in guild ${player.guildId}:`, {
+            console.error(`V2 Track error in guild ${guildId}:`, {
                 message: errorMessage,
                 severity: exception.severity,
                 cause: exception.cause,
@@ -1792,26 +1800,126 @@ module.exports = (client) => {
                 source: trackInfo.sourceName
             });
 
-            const guildId = player.guildId;
-            const channel = client.channels.cache.get(player.textChannel);
+            // If another track is already queued, let the active player move
+            // forward instead of creating another voice connection.
+            if (player.queue.length > 0) {
+                if (channel) {
+                    const skipContainer = advancedMessageManager.createV2Container('warning')
+                        .addTextDisplayComponents(
+                            textDisplay => textDisplay.setContent(
+                                `**⚠️ TRACK SKIPPED**\n\n**${trackInfo.title || 'Unknown track'}** could not be streamed.\n\n*Moving to the next queued track...*`
+                            )
+                        );
+
+                    const skipMsg = await channel.send({
+                        components: [skipContainer],
+                        flags: MessageFlags.IsComponentsV2
+                    });
+
+                    advancedMessageManager.addQuickDeleteMessage(client, skipMsg, 'error');
+                }
+
+                setTimeout(() => {
+                    try {
+                        player.play();
+                    } catch (playError) {
+                        console.error(`[V2 TRACK ERROR] Queue recovery failed in guild ${guildId}:`, playError);
+                    }
+                }, 0);
+                return;
+            }
+
+            // A single resolved YouTube result can still fail at stream time
+            // because YouTube requires login, blocks the client, or exposes no
+            // audio format. Search for another result using the same player.
+            if (
+                !track ||
+                typeof track !== 'object' ||
+                trackErrorRetries.has(track) ||
+                player.__recoveringTrackError
+            ) {
+                return;
+            }
+
+            trackErrorRetries.add(track);
+            player.__recoveringTrackError = true;
 
             if (channel) {
-                const errorContainer = advancedMessageManager.createV2Container('error')
+                const retryContainer = advancedMessageManager.createV2Container('warning')
                     .addTextDisplayComponents(
-                        textDisplay => textDisplay.setContent('**⚠️ TRACK ERROR**\n\n**Failed to play:** ' + (trackInfo.title || 'Unknown track') + '\n\n**Error:** ' + errorMessage + '\n\n*' + (player.queue.length > 0 ? 'Skipping to next track...' : 'Queue is empty.') + '*')
+                        textDisplay => textDisplay.setContent(
+                            `**⚠️ TRACK UNAVAILABLE**\n\n**${trackInfo.title || 'Unknown track'}** could not be streamed by YouTube.\n\n*Searching for another playable version...*`
+                        )
                     );
 
-                const errorMsg = await channel.send({
-                    components: [errorContainer],
+                const retryMsg = await channel.send({
+                    components: [retryContainer],
                     flags: MessageFlags.IsComponentsV2
                 });
 
-                advancedMessageManager.addMessage(guildId, errorMsg.id, channel.id, 'error');
+                advancedMessageManager.addQuickDeleteMessage(client, retryMsg, 'error');
             }
 
-            if (player.queue.length > 0) {
-                player.stop();
-            }
+            setTimeout(async () => {
+                try {
+                    const title = String(trackInfo.title || '').trim();
+                    const author = String(trackInfo.author || '').trim();
+                    const searchTerms = [
+                        [title, author].filter(Boolean).join(' '),
+                        title
+                    ].filter(Boolean);
+                    const failedIdentifier = trackInfo.identifier;
+                    const failedUri = trackInfo.uri;
+                    let replacement = null;
+
+                    for (const terms of searchTerms) {
+                        const result = await client.riffy.resolve({
+                            query: `ytmsearch:${terms}`,
+                            requester: track.requester
+                        });
+
+                        replacement = result?.tracks?.find(candidate => {
+                            const info = candidate?.info || {};
+                            return (
+                                info.identifier &&
+                                info.identifier !== failedIdentifier &&
+                                info.uri !== failedUri
+                            );
+                        });
+
+                        if (replacement) break;
+                    }
+
+                    if (!replacement) {
+                        throw new Error('No alternative playable YouTube result found');
+                    }
+
+                    replacement.requester = track.requester;
+                    player.queue.unshift(replacement);
+                    await player.play();
+                } catch (recoveryError) {
+                    console.error(`[V2 TRACK ERROR] Alternative search failed in guild ${guildId}:`, recoveryError);
+                    player.__recoveringTrackError = false;
+
+                    if (channel) {
+                        const failContainer = advancedMessageManager.createV2Container('error')
+                            .addTextDisplayComponents(
+                                textDisplay => textDisplay.setContent(
+                                    `**❌ TRACK SKIPPED**\n\nYouTube did not provide a playable audio stream for **${trackInfo.title || 'this track'}**.\n\n*Try another version, live upload, or remix of this song.*`
+                                )
+                            );
+
+                        const failMsg = await channel.send({
+                            components: [failContainer],
+                            flags: MessageFlags.IsComponentsV2
+                        });
+
+                        advancedMessageManager.addQuickDeleteMessage(client, failMsg, 'error');
+                    }
+
+                    player.destroy();
+                }
+            }, 0);
         });
 
         const cleanupOrphanedResources = async () => {
