@@ -244,6 +244,8 @@ const queueDisplayTimeouts = new Map();
 module.exports = (client) => {
     const stuckTrackRetries = new WeakSet();
     const trackErrorRetries = new WeakSet();
+    const autoplayTransitions = new Map();
+    const autoplayStartTimeoutMs = 30000;
 
     // Expose the shared message manager to prefix music commands so they
     // can clean up now-playing panels before destroying the Riffy player.
@@ -327,6 +329,13 @@ module.exports = (client) => {
                 const guildId = player.guildId;
 
                 if (!channel) return;
+
+                const autoplayTransition = autoplayTransitions.get(guildId);
+                if (autoplayTransition?.player === player) {
+                    clearTimeout(autoplayTransition.timeout);
+                    autoplayTransitions.delete(guildId);
+                    console.log(`[V2 AUTOPLAY] Next track started in guild ${guildId}`);
+                }
 
                 await advancedMessageManager.cleanupGuildMessages(client, guildId);
                 sessionManager.updateActivity(guildId);
@@ -575,12 +584,34 @@ module.exports = (client) => {
 
                 if (!channel) return;
 
-                await handlePlayerCleanup(client, guildId, player, 'Queue ended');
+                // Riffy can emit queueEnd more than once while autoplay is
+                // resolving. Do not start competing transitions for one guild.
+                const activeTransition = autoplayTransitions.get(guildId);
+                if (activeTransition?.player === player) return;
 
                 const result = await autoplayCollection.findOne({ guildId }).catch(() => null);
                 const autoplay = result ? result.autoplay : false;
 
                 if (autoplay) {
+                    // Keep the old now-playing message until trackStart for
+                    // the replacement track. Cleaning here races with
+                    // trackStart and can delete the new embed.
+                    const transition = {
+                        player,
+                        timeout: null
+                    };
+                    transition.timeout = setTimeout(() => {
+                        if (autoplayTransitions.get(guildId) !== transition) return;
+
+                        autoplayTransitions.delete(guildId);
+                        console.warn(`[V2 AUTOPLAY] Next track did not start within ${autoplayStartTimeoutMs}ms in guild ${guildId}`);
+
+                        if (client.riffy.players.get(guildId) === player) {
+                            player.destroy();
+                        }
+                    }, autoplayStartTimeoutMs);
+                    autoplayTransitions.set(guildId, transition);
+
                     const autoplayContainer = advancedMessageManager.createV2Container('autoplay')
                         .addTextDisplayComponents(
                             textDisplay => textDisplay.setContent('**🔄 AUTOPLAY ACTIVE**\nSearching for similar tracks...\n\n*Continuous music experience enabled.*')
@@ -610,7 +641,17 @@ module.exports = (client) => {
 
                     } catch (autoplayError) {
                         console.error('V2 Autoplay failed:', autoplayError);
-                        player.destroy();
+
+                        const failedTransition = autoplayTransitions.get(guildId);
+                        if (failedTransition?.player === player) {
+                            clearTimeout(failedTransition.timeout);
+                            autoplayTransitions.delete(guildId);
+                        }
+
+                        await handlePlayerCleanup(client, guildId, player, 'Autoplay failed');
+                        if (client.riffy.players.get(guildId) === player) {
+                            player.destroy();
+                        }
 
                         const failContainer = advancedMessageManager.createV2Container('warning')
                             .addTextDisplayComponents(
@@ -625,7 +666,9 @@ module.exports = (client) => {
                         advancedMessageManager.addQuickDeleteMessage(client, failMsg, 'autoplay_fail');
                     }
 
+                    return;
                 } else {
+                    await handlePlayerCleanup(client, guildId, player, 'Queue ended');
                     player.destroy();
 
                     const queueEndContainer = advancedMessageManager.createV2Container('session_end')
