@@ -28,62 +28,101 @@
     "name": "TriniumHost"
   },
   {
-    "Host" : "lavalink.oops.wtf",
-    "Port" : 443,
-    "Password" : "www.freelavalink.ga",
-    "Secure" : true
+    "name": "Serenetia",
+    "host": "lavalinkv4.serenetia.com",
+    "port": 443,
+    "password": "https://seretia.link/discord",
+    "secure": true
   },
   {
-    "Host" : "node1.kartadharta.xyz",
-    "Port" : 443,
-    "Password" : "kdlavalink",
-    "secure" : true
+    "name": "Jirayu",
+    "host": "lavalink.jirayu.net",
+    "port": 443,
+    "password": "youshallnotpass",
+    "secure": true
   },
   {
-    "Host" : "node1.gglvxd.tk",
-    "Port" : 443,
-    "Password" : "free",
-    "secure" : true
+    "name": "MilloHost",
+    "host": "lava-v4.millohost.my.id",
+    "port": 443,
+    "password": "https://discord.gg/mjS5J2K3ep",
+    "secure": true
   },
   {
-    "Host" : "node2.gglvxd.tk",
-    "Port" : 443,
-    "Password" : "free",
-    "Secure" : true
+    "name": "TriniumHost",
+    "host": "lavalink-v4.triniumhost.com",
+    "port": 443,
+    "password": "free",
+    "secure": true
   },
   {
-    "Host" : "lava.islantay.tk",
-    "Port" : 443,
-    "Password" : "AmeliaWatsonisTheBest**!",
-    "Secure" : true
+    "name": "Oops",
+    "host": "lavalink.oops.wtf",
+    "port": 443,
+    "password": "www.freelavalink.ga",
+    "secure": true
   },
   {
-    "Host" : "jp-lava.islantay.tk",
-    "Port" : 443,
-    "Password" : "AmeliaWatsonisTheBest**!",
-    "Secure" : true
+    "name": "KartaDharta",
+    "host": "node1.kartadharta.xyz",
+    "port": 443,
+    "password": "kdlavalink",
+    "secure": true
   },
   {
-    "Host" : "lavalink.botsuniversity.ml",
-    "Port" : 443,
-    "Password" : "mathiscool",
-    "Secure" : true
+    "name": "GGLVXD-1",
+    "host": "node1.gglvxd.tk",
+    "port": 443,
+    "password": "free",
+    "secure": true
   },
   {
-    "Host" : "lavalink2.botsuniversity.ml",
-    "Port" : 443,
-    "Password" : "mathiscool",
-    "Secure" : true
+    "name": "GGLVXD-2",
+    "host": "node2.gglvxd.tk",
+    "port": 443,
+    "password": "free",
+    "secure": true
   },
   {
-    "Host" : "krn.2d.gay",
-    "Port" : 443,
-    "Password" : "AWP)JQ$Gv9}dm.u",
-    "Secure" : true
+    "name": "Islantay",
+    "host": "lava.islantay.tk",
+    "port": 443,
+    "password": "AmeliaWatsonisTheBest**!",
+    "secure": true
   },
   {
-    "Host" : "server.relocation.tk",
-    "Port" : 1032,
-    "Password" : "youshallnotpass"
+    "name": "Islantay-JP",
+    "host": "jp-lava.islantay.tk",
+    "port": 443,
+    "password": "AmeliaWatsonisTheBest**!",
+    "secure": true
+  },
+  {
+    "name": "BotsUniversity-1",
+    "host": "lavalink.botsuniversity.ml",
+    "port": 443,
+    "password": "mathiscool",
+    "secure": true
+  },
+  {
+    "name": "BotsUniversity-2",
+    "host": "lavalink2.botsuniversity.ml",
+    "port": 443,
+    "password": "mathiscool",
+    "secure": true
+  },
+  {
+    "name": "KRN",
+    "host": "krn.2d.gay",
+    "port": 443,
+    "password": "AWP)JQ$Gv9}dm.u",
+    "secure": true
+  },
+  {
+    "name": "Relocation",
+    "host": "server.relocation.tk",
+    "port": 1032,
+    "password": "youshallnotpass",
+    "secure": false
   }
 ]
