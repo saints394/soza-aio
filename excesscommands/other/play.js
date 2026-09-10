@@ -19,6 +19,8 @@ function withTimeout(promise, timeoutMs, label) {
 }
 
 const guildPlayLocks = new Map();
+const nodeHealthCache = new WeakMap();
+let nodeResolutionQueue = Promise.resolve();
 
 function withGuildPlayLock(guildId, task) {
     const previous = guildPlayLocks.get(guildId) || Promise.resolve();
@@ -47,17 +49,61 @@ function destroyGuildPlayer(client, guildId) {
     }
 }
 
-async function waitForConnectedNode(client, timeoutMs = 15000) {
+function withNodeResolutionLock(task) {
+    const run = nodeResolutionQueue.then(task);
+    nodeResolutionQueue = run.catch(() => {});
+    return run;
+}
+
+function markNodeUnhealthy(node, error) {
+    if (!node) return;
+
+    nodeHealthCache.set(node, {
+        healthy: false,
+        checkedAt: Date.now(),
+        error: error?.message || String(error || 'Unknown node failure')
+    });
+}
+
+async function checkNodeHealth(node) {
+    if (!node?.connected || !node.rest?.getStats) return false;
+
+    const cached = nodeHealthCache.get(node);
+    if (cached && Date.now() - cached.checkedAt < 30000) {
+        return cached.healthy;
+    }
+
+    try {
+        await withTimeout(
+            node.rest.getStats(),
+            5000,
+            `Lavalink node health check (${node.name})`
+        );
+        nodeHealthCache.set(node, { healthy: true, checkedAt: Date.now() });
+        return true;
+    } catch (error) {
+        markNodeUnhealthy(node, error);
+        console.warn(`[RIFFY] Node ${node.name} failed health check:`, error.message);
+        return false;
+    }
+}
+
+async function waitForHealthyNode(client, timeoutMs = 15000, excludedNodes = new Set()) {
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < timeoutMs) {
-        const node = client.riffy?.leastUsedNodes?.[0];
-        if (node?.connected) return node;
+        const candidates = (client.riffy?.leastUsedNodes || [])
+            .filter(node => !excludedNodes.has(node))
+            .sort((a, b) => (a.rest?.calls || 0) - (b.rest?.calls || 0));
+
+        for (const node of candidates) {
+            if (await checkNodeHealth(node)) return node;
+        }
 
         await new Promise(resolve => setTimeout(resolve, 250));
     }
 
-    throw new Error('No Lavalink nodes are connected');
+    throw new Error('No healthy Lavalink nodes are available');
 }
 
 function isUsablePlayer(player, voiceChannelId) {
@@ -74,6 +120,18 @@ function getPlaybackFailureMessage(error) {
 
     if (message.includes('no lavalink nodes')) {
         return 'Tidak ada server Lavalink yang sedang online.';
+    }
+
+    if (message.includes('no healthy lavalink nodes')) {
+        return 'Tidak ada server Lavalink yang merespons dengan sehat.';
+    }
+
+    if (message.includes('track search')) {
+        return 'Server Lavalink tidak merespons pencarian lagu.';
+    }
+
+    if (message.includes('lavalink playback')) {
+        return 'Server Lavalink tidak merespons saat memulai audio.';
     }
 
     if (message.includes('timed out') || message.includes('timeout')) {
@@ -118,9 +176,8 @@ module.exports = {
 
         const guildId = message.guild.id;
         return withGuildPlayLock(guildId, async () => {
-            const createPlayer = () => {
-                return waitForConnectedNode(client).then(() => withTimeout(
-                    client.riffy.createConnection({
+            const createPlayer = (node) => withTimeout(
+                    client.riffy.createPlayer(node, {
                         guildId,
                         voiceChannel: voiceChannel.id,
                         textChannel: message.channel.id,
@@ -128,31 +185,46 @@ module.exports = {
                     }),
                     15000,
                     'Lavalink voice connection'
-                ));
-            };
-            const resolveTrack = () => withTimeout(
-                client.riffy.resolve({
-                    query,
-                    requester: message.author
-                }),
-                20000,
-                'Track search'
-            );
+                );
 
-            const playAttempt = async (forceFresh) => {
+            const resolveTrack = (node) => withNodeResolutionLock(async () => {
+                const previousNode = client.riffy.nodeByRegion;
+                client.riffy.nodeByRegion = node;
+
+                try {
+                    return await withTimeout(
+                        client.riffy.resolve({
+                            query,
+                            requester: message.author
+                        }),
+                        20000,
+                        'Track search'
+                    );
+                } finally {
+                    if (client.riffy.nodeByRegion === node) {
+                        client.riffy.nodeByRegion = previousNode;
+                    }
+                }
+            });
+
+            let lastAttemptNode = null;
+            const playAttempt = async (forceFresh, excludedNodes) => {
+                lastAttemptNode = null;
+
                 if (forceFresh) {
                     destroyGuildPlayer(client, guildId);
                 }
 
-                await waitForConnectedNode(client);
-
                 let player = client.riffy.players.get(guildId);
-                if (!isUsablePlayer(player, voiceChannel.id)) {
+                if (isUsablePlayer(player, voiceChannel.id) && await checkNodeHealth(player.node)) {
+                    lastAttemptNode = player.node;
+                } else {
                     if (player) destroyGuildPlayer(client, guildId);
-                    player = await createPlayer();
+                    lastAttemptNode = await waitForHealthyNode(client, 15000, excludedNodes);
+                    player = await createPlayer(lastAttemptNode);
                 }
 
-                const result = await resolveTrack();
+                const result = await resolveTrack(lastAttemptNode);
                 if (!result?.tracks?.length) {
                     return { player, track: null };
                 }
@@ -173,12 +245,38 @@ module.exports = {
             };
 
             try {
-                let result;
-                try {
-                    result = await playAttempt(false);
-                } catch (firstError) {
-                    console.warn('[RIFFY] First playback attempt failed; rebuilding the player:', firstError.message);
-                    result = await playAttempt(true);
+                const failedNodes = new Set();
+                let result = null;
+                let lastError = null;
+
+                for (let attempt = 0; attempt < 3; attempt++) {
+                    try {
+                        result = await playAttempt(attempt > 0, failedNodes);
+                        lastError = null;
+                        break;
+                    } catch (attemptError) {
+                        lastError = attemptError;
+
+                        if (lastAttemptNode) {
+                            failedNodes.add(lastAttemptNode);
+                            markNodeUnhealthy(lastAttemptNode, attemptError);
+                            console.warn(
+                                `[RIFFY] Playback attempt ${attempt + 1} failed on ${lastAttemptNode.name}:`,
+                                attemptError.message
+                            );
+                        } else {
+                            console.warn(
+                                `[RIFFY] Playback attempt ${attempt + 1} failed before node selection:`,
+                                attemptError.message
+                            );
+                        }
+
+                        destroyGuildPlayer(client, guildId);
+                    }
+                }
+
+                if (!result) {
+                    throw lastError || new Error('Playback failed after node failover attempts');
                 }
 
                 if (!result.track) {

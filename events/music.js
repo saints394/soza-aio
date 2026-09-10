@@ -246,6 +246,7 @@ module.exports = (client) => {
     const trackErrorRetries = new WeakSet();
     const autoplayTransitions = new Map();
     const autoplayStartTimeoutMs = 30000;
+    const autoplayResolveTimeoutMs = 15000;
 
     // Expose the shared message manager to prefix music commands so they
     // can clean up now-playing panels before destroying the Riffy player.
@@ -622,10 +623,26 @@ module.exports = (client) => {
                         flags: MessageFlags.IsComponentsV2
                     });
 
-                    advancedMessageManager.addQuickDeleteMessage(client, autoplayMsg, 'autoplay');
-
                     try {
-                        await player.autoplay(player);
+                        if (typeof player.autoplay !== 'function') {
+                            throw new Error('Riffy autoplay method is unavailable');
+                        }
+
+                        let resolveTimeout;
+                        try {
+                            await Promise.race([
+                                Promise.resolve().then(() => player.autoplay(player)),
+                                new Promise((_, reject) => {
+                                    resolveTimeout = setTimeout(() => {
+                                        reject(new Error(`Autoplay resolution timed out after ${autoplayResolveTimeoutMs}ms`));
+                                    }, autoplayResolveTimeoutMs);
+                                })
+                            ]);
+                        } finally {
+                            clearTimeout(resolveTimeout);
+                        }
+
+                        await autoplayMsg.delete().catch(() => {});
 
                         const successContainer = advancedMessageManager.createV2Container('success')
                             .addTextDisplayComponents(
@@ -641,6 +658,7 @@ module.exports = (client) => {
 
                     } catch (autoplayError) {
                         console.error('V2 Autoplay failed:', autoplayError);
+                        await autoplayMsg.delete().catch(() => {});
 
                         const failedTransition = autoplayTransitions.get(guildId);
                         if (failedTransition?.player === player) {
@@ -815,12 +833,16 @@ module.exports = (client) => {
 
                     case 'skip':
                         const currentTrack = player.current;
+                        const autoplaySetting = await autoplayCollection.findOne({
+                            guildId: interaction.guildId
+                        }).catch(() => null);
+                        const autoplayEnabled = Boolean(autoplaySetting?.autoplay);
                         await advancedMessageManager.cleanupGuildMessages(client, interaction.guildId, ['track']);
                         player.stop();
 
                         const skipContainer = advancedMessageManager.createV2Container('info')
                             .addTextDisplayComponents(
-                                textDisplay => textDisplay.setContent(`**⏭️ TRACK SKIPPED**\n\n${currentTrack ? `**Skipped:** ${currentTrack.info.title}` : 'Current track skipped'}\n\n*${player.queue.length > 0 ? 'Moving to next track...' : 'Queue is empty - session will end.'}*`)
+                                textDisplay => textDisplay.setContent(`**⏭️ TRACK SKIPPED**\n\n${currentTrack ? `**Skipped:** ${currentTrack.info.title}` : 'Current track skipped'}\n\n*${player.queue.length > 0 ? 'Moving to next track...' : autoplayEnabled ? 'Queue is empty - autoplay is searching...' : 'Queue is empty - session will end.'}*`)
                             );
 
                         const skipReply = await interaction.editReply({
