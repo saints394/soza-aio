@@ -1592,9 +1592,10 @@ module.exports = {
                         setTimeout(() => reply.delete().catch(() => {}), 8000);
                         
                        
-                        // Do not overwrite Riffy's player.autoplay() method
-                        // with a boolean. The setting is persisted in MongoDB
-                        // and queueEnd reads it when needed.
+                        const player = client.riffy.players.get(guildId);
+                        if (player) {
+                            player.autoplay = enable;
+                        }
                     } catch (error) {
                         console.error('Error setting autoplay:', error);
                         
