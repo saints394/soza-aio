@@ -1,0 +1,1 @@
+- [Spotify playlist playback](spotify-playback.md) — prefer Spotify API data, but fall back to public metadata for valid public collections.
