@@ -355,6 +355,22 @@ module.exports = {
                                         trackList.push(...fetched);
                                         offset += limit;
                                     } while (fetched.length === limit);
+                                } else if (spotifyData.type === 'album') {
+                                    const albumId = query.split('/album/')[1].split('?')[0];
+                                    let offset = 0;
+                                    const limit = 50;
+                                    let fetched;
+
+                                    do {
+                                        const data = await spotifyApi.getAlbumTracks(albumId, { limit, offset });
+                                        fetched = data.body.items
+                                            .filter(item => item)
+                                            .map(item =>
+                                                `${item.name} - ${item.artists.map(a => a.name).join(', ')}`
+                                            );
+                                        trackList.push(...fetched);
+                                        offset += limit;
+                                    } while (fetched.length === limit);
                                 }
                 
                                 if (trackList.length === 0) {
@@ -396,7 +412,7 @@ module.exports = {
                                     .addSectionComponents(
                                         section => section
                                             .addTextDisplayComponents(
-                                                textDisplay => textDisplay.setContent(`**${spotifyData.type === 'track' ? '🎵 Track' : '📋 Playlist'} Added Successfully**\n\nAdded **${added}** track${added !== 1 ? 's' : ''} from Spotify to the queue.\n\n**Source:** ${spotifyData.name || 'Spotify Content'}`)
+                                                textDisplay => textDisplay.setContent(`**${spotifyData.type === 'track' ? '🎵 Track' : spotifyData.type === 'album' ? '💿 Album' : '📋 Playlist'} Added Successfully**\n\nAdded **${added}** track${added !== 1 ? 's' : ''} from Spotify to the queue.\n\n**Source:** ${spotifyData.name || 'Spotify Content'}`)
                                             )
                                             .setThumbnailAccessory(
                                                 thumbnail => thumbnail

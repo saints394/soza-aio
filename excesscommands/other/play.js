@@ -1,4 +1,5 @@
 const { PermissionFlagsBits } = require('discord.js');
+const { getSpotifyTrackQueries, parseSpotifyUrl } = require('../../utils/spotifyTracks');
 
 function temporaryReply(message, content, timeout = 6000) {
     return message.reply(content).then(reply => {
@@ -176,6 +177,22 @@ module.exports = {
 
         const guildId = message.guild.id;
         return withGuildPlayLock(guildId, async () => {
+        let spotifyRequest = null;
+        try {
+            if (parseSpotifyUrl(query)) {
+                spotifyRequest = await getSpotifyTrackQueries(query);
+                if (!spotifyRequest?.queries?.length) {
+                    return temporaryReply(message, '❌ Playlist atau album Spotify itu tidak berisi lagu yang bisa diputar.');
+                }
+            }
+        } catch (error) {
+            console.error('Spotify collection load error:', error);
+            return temporaryReply(
+                message,
+                '❌ Playlist/album Spotify tidak bisa dibaca. Pastikan link bersifat publik dan kredensial Spotify sudah diatur.'
+            );
+        }
+
             const createPlayer = (node) => withTimeout(
                     client.riffy.createPlayer(node, {
                         guildId,
@@ -187,14 +204,14 @@ module.exports = {
                     'Lavalink voice connection'
                 );
 
-            const resolveTrack = (node) => withNodeResolutionLock(async () => {
+            const resolveTrack = (node, searchQuery = query) => withNodeResolutionLock(async () => {
                 const previousNode = client.riffy.nodeByRegion;
                 client.riffy.nodeByRegion = node;
 
                 try {
                     return await withTimeout(
                         client.riffy.resolve({
-                            query,
+                            query: searchQuery,
                             requester: message.author
                         }),
                         20000,
@@ -224,24 +241,37 @@ module.exports = {
                     player = await createPlayer(lastAttemptNode);
                 }
 
-                const result = await resolveTrack(lastAttemptNode);
-                if (!result?.tracks?.length) {
-                    return { player, track: null };
+                const queries = spotifyRequest?.queries || [query];
+                const tracks = [];
+                let lastTrackError = null;
+
+                for (const searchQuery of queries) {
+                    try {
+                        const result = await resolveTrack(lastAttemptNode, searchQuery);
+                        if (result?.tracks?.length) {
+                            const track = result.tracks[0];
+                            track.requester = {
+                                id: message.author.id,
+                                username: message.author.username,
+                                avatarURL: message.author.displayAvatarURL()
+                            };
+                            tracks.push(track);
+                        }
+                    } catch (error) {
+                        lastTrackError = error;
+                        console.warn(`[RIFFY] Could not resolve "${searchQuery}":`, error.message);
+                    }
                 }
 
-                const track = result.tracks[0];
-                track.requester = {
-                    id: message.author.id,
-                    username: message.author.username,
-                    avatarURL: message.author.displayAvatarURL()
-                };
+                if (!tracks.length && lastTrackError) throw lastTrackError;
+                if (!tracks.length) return { player, track: null, tracks };
 
-                player.queue.add(track);
+                for (const track of tracks) player.queue.add(track);
                 if (!player.playing && !player.paused) {
                     await withTimeout(player.play(), 20000, 'Lavalink playback');
                 }
 
-                return { player, track };
+                return { player, track: tracks[0], tracks };
             };
 
             try {
@@ -284,8 +314,12 @@ module.exports = {
                 }
 
                 const position = result.player.queue.length;
+                const addedCount = result.tracks?.length || 1;
+                const collectionLabel = spotifyRequest?.type === 'album' ? 'album' : 'playlist';
                 const reply = await message.reply(
-                    `🎵 Added **${result.track.info.title}** to the queue.\n📍 Position: **#${position}**`
+                    spotifyRequest
+                        ? `🎵 Spotify ${collectionLabel} **${spotifyRequest.name}** ditambahkan ke queue.\n✅ **${addedCount}** lagu berhasil ditambahkan.\n📍 Queue sekarang: **${position}** lagu`
+                        : `🎵 Added **${result.track.info.title}** to the queue.\n📍 Position: **#${position}**`
                 );
                 setTimeout(() => reply.delete().catch(() => {}), 6000);
             } catch (error) {
