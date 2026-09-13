@@ -45,7 +45,7 @@
 <h4>Step 1: Configure environment variables</h4>
 
 <ol>
-  <li>Set the variables in your hosting provider. Do not commit tokens or database credentials to <code>config.json</code>.</li>
+  <li>Set the variables in your hosting provider. Do not commit tokens or database credentials to <code>config.json</code>. Public Spotify links played with <code>.play</code> or <code>/music play</code> do not require Spotify credentials.</li>
 </ol>
 
 <h4>ENV SETUP</h4>

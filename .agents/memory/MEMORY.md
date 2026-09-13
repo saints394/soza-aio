@@ -1,1 +1,1 @@
-- [Spotify playlist playback](spotify-playback.md) — prefer Spotify API data, but fall back to public metadata for valid public collections.
+- [Spotify playlist playback](spotify-playback.md) — use public Spotify page metadata for playback; Spotify API credentials are not required.

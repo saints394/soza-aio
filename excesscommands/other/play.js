@@ -187,12 +187,9 @@ module.exports = {
             }
         } catch (error) {
             console.error('Spotify collection load error:', error);
-            const spotifyMessage = error.message.includes('not configured')
-                ? 'Tambahkan SPOTIFY_CLIENT_ID dan SPOTIFY_CLIENT_SECRET, atau gunakan link Spotify publik yang bisa dibaca.'
-                : 'Pastikan link Spotify masih aktif dan playlist/album tidak private.';
             return temporaryReply(
                 message,
-                `❌ Playlist/album Spotify tidak bisa dibaca.\n${spotifyMessage}`
+                `❌ Link Spotify tidak bisa dibaca.\nPastikan link masih aktif dan konten Spotify bersifat publik.`
             );
         }
 

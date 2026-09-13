@@ -19,19 +19,12 @@ const musicIcons = require('../../UI/icons/musicicons');
 const cmdIcons = require('../../UI/icons/commandicons');
 const { autoplayCollection } = require('../../mongodb');
 const { playlistCollection } = require('../../mongodb');
-const SpotifyWebApi = require('spotify-web-api-node');
-const { getData } = require('spotify-url-info')(fetch);
-const config = require('../../config.js');
+const { getSpotifyTrackQueries, parseSpotifyUrl } = require('../../utils/spotifyTracks');
 const { maximizeVoiceChannelBitrate } = require('../../utils/voiceQuality');
 const {
     setStablePlayerVolume,
     hasActiveDisTubeQueue
 } = require('../../utils/musicAudio');
-
-const spotifyApi = new SpotifyWebApi({
-    clientId: config.spotifyClientId,
-    clientSecret: config.spotifyClientSecret,
-});
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -330,48 +323,10 @@ module.exports = {
                         if (!player) return;
                 
                   
-                        if (query.includes('spotify.com')) {
+                        if (parseSpotifyUrl(query)) {
                             try {
-                                const spotifyData = await getData(query);
-                                const token = await spotifyApi.clientCredentialsGrant();
-                                spotifyApi.setAccessToken(token.body.access_token);
-                        
-                                let trackList = [];
-                        
-                                if (spotifyData.type === 'track') {
-                                    const searchQuery = `${spotifyData.name} - ${spotifyData.artists.map(a => a.name).join(', ')}`;
-                                    trackList.push(searchQuery);
-                                } else if (spotifyData.type === 'playlist') {
-                                    const playlistId = query.split('/playlist/')[1].split('?')[0];
-                                    let offset = 0;
-                                    const limit = 100;
-                                    let fetched = [];
-                        
-                                    do {
-                                        const data = await spotifyApi.getPlaylistTracks(playlistId, { limit, offset });
-                                        fetched = data.body.items.filter(item => item.track).map(item =>
-                                            `${item.track.name} - ${item.track.artists.map(a => a.name).join(', ')}`
-                                        );
-                                        trackList.push(...fetched);
-                                        offset += limit;
-                                    } while (fetched.length === limit);
-                                } else if (spotifyData.type === 'album') {
-                                    const albumId = query.split('/album/')[1].split('?')[0];
-                                    let offset = 0;
-                                    const limit = 50;
-                                    let fetched;
-
-                                    do {
-                                        const data = await spotifyApi.getAlbumTracks(albumId, { limit, offset });
-                                        fetched = data.body.items
-                                            .filter(item => item)
-                                            .map(item =>
-                                                `${item.name} - ${item.artists.map(a => a.name).join(', ')}`
-                                            );
-                                        trackList.push(...fetched);
-                                        offset += limit;
-                                    } while (fetched.length === limit);
-                                }
+                                const spotifyRequest = await getSpotifyTrackQueries(query);
+                                const trackList = spotifyRequest?.queries || [];
                 
                                 if (trackList.length === 0) {
                                     const noTracksContainer = new ContainerBuilder()
@@ -412,7 +367,7 @@ module.exports = {
                                     .addSectionComponents(
                                         section => section
                                             .addTextDisplayComponents(
-                                                textDisplay => textDisplay.setContent(`**${spotifyData.type === 'track' ? '🎵 Track' : spotifyData.type === 'album' ? '💿 Album' : '📋 Playlist'} Added Successfully**\n\nAdded **${added}** track${added !== 1 ? 's' : ''} from Spotify to the queue.\n\n**Source:** ${spotifyData.name || 'Spotify Content'}`)
+                                                textDisplay => textDisplay.setContent(`**${spotifyRequest.type === 'track' ? '🎵 Track' : spotifyRequest.type === 'album' ? '💿 Album' : '📋 Playlist'} Added Successfully**\n\nAdded **${added}** track${added !== 1 ? 's' : ''} from Spotify to the queue.\n\n**Source:** ${spotifyRequest.name || 'Spotify Content'}`)
                                             )
                                             .setThumbnailAccessory(
                                                 thumbnail => thumbnail
